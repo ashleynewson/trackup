@@ -1,0 +1,10 @@
+[package]
+name = "trackup"
+version = "0.1.0"
+authors = ["Ashley Newson <ashleynewson@smartsim.org.uk>"]
+
+[dependencies]
+libc = "0.2.58"
+nix = "0.14.1"
+crossbeam = "0.7.1"
+clap = "2.33.0"

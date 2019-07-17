@@ -1,0 +1,46 @@
+extern crate trackup;
+extern crate clap;
+
+use std::path::Path;
+
+fn main() {
+    let matches = clap::App::new(env!("CARGO_PKG_NAME"))
+        .version(env!("CARGO_PKG_VERSION"))
+        .author(env!("CARGO_PKG_AUTHORS"))
+        .about("Snapshotless device backup")
+        .arg(
+            clap::Arg::with_name("in")
+                .short("i")
+                .long("in")
+                .value_name("SOURCE")
+                .help("Input block device")
+                .takes_value(true)
+                .required(true)
+        )
+        .arg(
+            clap::Arg::with_name("out")
+                .short("o")
+                .long("out")
+                .value_name("DESTINATION")
+                .help("Output file (or block device)")
+                .takes_value(true)
+                .required(true)
+        )
+        .arg(
+            clap::Arg::with_name("chunk-size")
+                .short("c")
+                .long("chunk-size")
+                .value_name("CHUNK_SIZE")
+                .help("Granularity of modification tracking")
+                .takes_value(true)
+                .required(true)
+        )
+        .get_matches();
+
+    let chunk_size: usize = matches.value_of("CHUNK_SIZE").unwrap().parse().unwrap();
+    let source      = matches.value_of("SOURCE").unwrap();
+    let destination = matches.value_of("DESTINATION").unwrap();
+    if let Err(_) = trackup::backup_device(chunk_size, Path::new(source), Path::new(destination)) {
+        eprintln!("Backup failed");
+    }
+}
