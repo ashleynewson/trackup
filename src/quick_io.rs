@@ -6,6 +6,7 @@ use std::io::{Read,Write};
 
 pub fn append_to_file_at_path(path: &Path, buf: &[u8]) -> Result<(),String> {
     let mut file = match OpenOptions::new().write(true).append(true).open(path) {
+    // let mut file = match OpenOptions::new().write(true).append(true).open(path) {
         Ok(x) => x,
         Err(_) => {
             return Err(format!("Could not open '{}' for appending", path.display()));
@@ -53,10 +54,10 @@ pub fn fd_poll_read(fd: c_int) -> bool {
     };
     match poll_ret {
         0 => {
-            true
+            false
         },
         1 => {
-            false
+            pollfd.revents & libc::POLLIN != 0
         },
         _ => {
             panic!("Unexpected poll return status");

@@ -7,6 +7,7 @@ use std::os::unix::io::IntoRawFd;
 use std::io::Read;
 use device::Device;
 use quick_io::{append_to_file_at_path,slurp_file_at_path,fd_poll_read};
+// use std::ffi::CString;
 
 
 // This needs to be read directly from a file.
@@ -90,7 +91,7 @@ impl BlkEvent {
             } else if magic & 0x00ffffff == MAGIC_REVERSE_ENDIAN {
                 (false, (magic >> 24) as u8)
             } else {
-                panic!("Incorrect magic number for event");
+                panic!("Incorrect magic number for event. Got {:x}", magic);
             };
 
         if version != SUPPORTED_VERSION {
@@ -102,6 +103,7 @@ impl BlkEvent {
         }
 
         if event.pdu_len > 0 {
+            eprintln!("TEST");
             // Just discard - we don't care.
             let mut discard = vec![0; event.pdu_len as usize];
             trace_pipe.read_exact(&mut discard).expect("Could not read (pdu portion of) event from trace pipe");
@@ -195,8 +197,8 @@ impl<'d> ChangeLogger<'d> {
 
     pub fn run(&self, log_channel: Sender<usize>, sync_barrier_channel: Receiver<Arc<Barrier>>) {
         {
-            let events_enabled = slurp_file_at_path(&self.trace_path.join("events/enabled")).unwrap();
-            if std::str::from_utf8(&events_enabled).unwrap() != "0" {
+            let events_enabled = slurp_file_at_path(&self.trace_path.join("events/enable")).unwrap();
+            if std::str::from_utf8(&events_enabled).unwrap() != "0\n" {
                 panic!("Some tracing events are already enabled");
             }
         }
@@ -207,10 +209,22 @@ impl<'d> ChangeLogger<'d> {
             || {append_to_file_at_path(&self.trace_path.join("current_tracer"), &old_current_tracer).unwrap();},
         );
 
-        let old_tracer_options = slurp_file_at_path(&self.trace_path.join("trace_options")).unwrap();
-        let _tracer_options_setup = DoUndo::new(
-            || {append_to_file_at_path(&self.trace_path.join("trace_options"), b"bin\nnocontext-info\n").unwrap();},
-            || {append_to_file_at_path(&self.trace_path.join("trace_options"), &old_tracer_options).unwrap();},
+        // let old_tracer_options = slurp_file_at_path(&self.trace_path.join("trace_options")).unwrap();
+        // let _tracer_options_setup = DoUndo::new(
+        //     || {append_to_file_at_path(&self.trace_path.join("trace_options"), b"bin\nnocontext-info\n").unwrap();},
+        //     || {append_to_file_at_path(&self.trace_path.join("trace_options"), &old_tracer_options).unwrap();},
+        // );
+
+        let old_tracer_option_bin = slurp_file_at_path(&self.trace_path.join("options/bin")).unwrap();
+        let _tracer_option_bin_setup = DoUndo::new(
+            || {append_to_file_at_path(&self.trace_path.join("options/bin"), b"1\n").unwrap();},
+            || {append_to_file_at_path(&self.trace_path.join("options/bin"), &old_tracer_option_bin).unwrap();},
+        );
+
+        let old_tracer_option_context = slurp_file_at_path(&self.trace_path.join("options/context-info")).unwrap();
+        let _tracer_option_context = DoUndo::new(
+            || {append_to_file_at_path(&self.trace_path.join("options/context-info"), b"0\n").unwrap();},
+            || {append_to_file_at_path(&self.trace_path.join("options/context-info"), &old_tracer_option_context).unwrap();},
         );
 
         let mut trace_pipe = File::open(&self.trace_path.join("trace_pipe")).expect("Could not open trace pipe");
@@ -219,11 +233,39 @@ impl<'d> ChangeLogger<'d> {
         // Flush anything in the trace_pipe first so we know we're only going
         // to get blk data.
         {
-            // I'm assuming the stream can't ever half-write a data structure.
-            let mut junked: Vec<u8> = vec![0];
-            while fd_poll_read(trace_pipe_fd) {
-                trace_pipe.read_exact(&mut junked).expect("Could not pre-consume trace_pipe before tracing");
+            let file_flags = unsafe{
+                libc::fcntl(trace_pipe_fd, libc::F_GETFL, 0)
+            };
+            if file_flags < 0 {
+                panic!("Could not get trace_pipe file flags");
             }
+            let file = unsafe{
+                libc::fdopen(trace_pipe_fd, b"rb\0".as_ptr() as *const i8)
+            };
+            if file.is_null() {
+                panic!("Could not open trace_pipe stream");
+            }
+            unsafe{
+                if libc::fcntl(trace_pipe_fd, libc::F_SETFL, file_flags | libc::O_NONBLOCK) < 0 {
+                    panic!("Could not set non-blocking trace_pipe");
+                }
+            };
+            // I'm assuming the stream can't ever half-write a data structure.
+            // let mut junked: Vec<u8> = vec![0];
+            // while fd_poll_read(trace_pipe_fd) {
+            //     trace_pipe.read_exact(&mut junked).expect("Could not pre-consume trace_pipe before tracing");
+            // }
+            unsafe{
+                while libc::fgetc(file) >= 0 {};
+            };
+            unsafe{
+                if libc::fcntl(trace_pipe_fd, libc::F_SETFL, file_flags) < 0 {
+                    panic!("Could not restore blocking io on trace_pipe");
+                }
+            };
+            unsafe{
+                libc::fclose(file);
+            };
         }
 
         let block_trace_enable_path = Path::new("/sys/dev/block").join(&format!("{}:{}", self.device.major, self.device.minor)).join("trace/enable");
@@ -265,6 +307,7 @@ impl<'d> ChangeLogger<'d> {
             }
         };
         let mut try_consume_event = || {
+            // Replace with non-blocking read
             let can_read = fd_poll_read(trace_pipe_fd);
             if can_read {
                 consume_event();

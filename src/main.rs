@@ -37,9 +37,9 @@ fn main() {
         )
         .get_matches();
 
-    let chunk_size: usize = matches.value_of("CHUNK_SIZE").unwrap().parse().unwrap();
-    let source      = matches.value_of("SOURCE").unwrap();
-    let destination = matches.value_of("DESTINATION").unwrap();
+    let source      = matches.value_of("in").unwrap();
+    let destination = matches.value_of("out").unwrap();
+    let chunk_size: usize = matches.value_of("chunk-size").unwrap().parse().unwrap();
     if let Err(_) = trackup::backup_device(chunk_size, Path::new(source), Path::new(destination)) {
         eprintln!("Backup failed");
     }

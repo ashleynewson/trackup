@@ -29,15 +29,15 @@ impl Device {
             stat_result
         };
 
-        let major = unsafe{libc::major(stat_result.st_dev)};
-        let minor = unsafe{libc::minor(stat_result.st_dev)};
+        let major = unsafe{libc::major(stat_result.st_rdev)};
+        let minor = unsafe{libc::minor(stat_result.st_rdev)};
 
         if major == 0 {
-            return Err(format!("Target device does not actually appear to be a device"));
+            return Err(format!("Target device does not actually appear to be a device."));
         }
 
         Ok(Self{
-            dev: stat_result.st_dev,
+            dev: stat_result.st_rdev,
             major,
             minor,
         })
