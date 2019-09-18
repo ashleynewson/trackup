@@ -20,6 +20,7 @@ pub fn append_to_file_at_path(path: &Path, buf: &[u8]) -> Result<(),String> {
         return Err(format!("Could not append data to '{}' (flush failed)", path.display()));
     }
 
+    eprintln!("Appending to file '{}':\n{}", path.display(), std::str::from_utf8(buf).unwrap());
     Ok(())
 }
 
@@ -36,6 +37,7 @@ pub fn slurp_file_at_path(path: &Path) -> Result<Vec<u8>, String> {
         return Err(format!("Could not read data from '{}'", path.display()));
     }
 
+    eprintln!("Slurped file '{}':\n{}", path.display(), std::str::from_utf8(&buf).unwrap());
     Ok(buf)
 }
 

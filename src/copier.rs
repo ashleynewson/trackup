@@ -2,24 +2,26 @@ use std::sync::mpsc::channel;
 use std::sync::mpsc::sync_channel;
 use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc,Barrier};
-use std::path::Path;
+use std::time::Instant;
+use std::io::Write;
 
+use config::Config;
 use device::{Device,DeviceFile};
 use backup_file::BackupFile;
 use chunk_tracker::ChunkTracker;
 use writer::Writer;
 use change_logger::ChangeLogger;
 
-pub struct Copier<'s, 'd> {
-    chunk_size: usize,
+pub struct Copier<'c, 's, 'd> {
+    config: &'c Config<'c>,
     source: &'s mut DeviceFile,
     destination: &'d mut BackupFile,
 }
 
-impl<'s, 'd> Copier<'s, 'd> {
-    pub fn new(chunk_size: usize, source: &'s mut DeviceFile, destination: &'d mut BackupFile) -> Self {
+impl<'c, 's, 'd> Copier<'c, 's, 'd> {
+    pub fn new(config: &'c Config, source: &'s mut DeviceFile, destination: &'d mut BackupFile) -> Self {
         Copier {
-            chunk_size,
+            config,
             source,
             destination,
         }
@@ -32,8 +34,8 @@ impl<'s, 'd> Copier<'s, 'd> {
         let device = Device::from_file(&self.source).unwrap();
 
         let chunk_count: usize = (
-            self.source.get_size() / (self.chunk_size as u64)
-            + if self.source.get_size() % (self.chunk_size as u64) != 0 {1} else {0}
+            self.source.get_size() / (self.config.chunk_size as u64)
+            + if self.source.get_size() % (self.config.chunk_size as u64) != 0 {1} else {0}
         ) as usize;
 
         let mut chunk_tracker = ChunkTracker::new(chunk_count);
@@ -44,16 +46,15 @@ impl<'s, 'd> Copier<'s, 'd> {
         let (sync_barrier_produce, sync_barrier_consume) = channel();
 
         crossbeam::scope(|thread_scope| {
-            // let change_logger_thread = 
             {
-                let chunk_size = self.chunk_size;
                 let device_ref = &device;
+                let config = self.config;
+
                 thread_scope.spawn(move |_| {
-                    let change_logger = ChangeLogger::new(chunk_size, device_ref, Path::new("/sys/kernel/debug/tracing"));
+                    let change_logger = ChangeLogger::new(config, device_ref);
                     change_logger.run(change_queue_produce, sync_barrier_consume);
                 });
             }
-            // let writer_thread = 
             {
                 let destination = &mut self.destination;
                 thread_scope.spawn(move |_| {
@@ -61,6 +62,13 @@ impl<'s, 'd> Copier<'s, 'd> {
                     writer.run(write_queue_consume);
                 });
             }
+
+            // Constrain the lifetime of our producers/consumers so that
+            // the child threads can witness a disconnect.
+            let sync_barrier_produce = sync_barrier_produce;
+            let write_queue_produce = write_queue_produce;
+            // We don't need to constrain change_queue as it doesn't
+            // strictly control any looping behaviour.
 
             let update_chunk_tracker = |chunk_tracker: &mut ChunkTracker| {
                 'drain_change_queue: loop {
@@ -88,15 +96,17 @@ impl<'s, 'd> Copier<'s, 'd> {
             let mut find_index: Option<usize> = None;
             let mut synced = false;
 
-            let log_chunk_count: u64 = (chunk_count as f64).log2() as u64;
             let display_detail: usize = 
-                if log_chunk_count <= 9 {
+                if chunk_count <= self.config.max_diagram_size {
                     0
                 } else {
-                    log_chunk_count - 9
+                    // Mathematically, the first ceil isn't necessary, but I'm
+                    // being (likely unnecessarily) paranoid about precision.
+                    (chunk_count as f64 / self.config.max_diagram_size as f64).ceil().log2().ceil() as u64
                 } as usize;
-            let display_detail_size = 1 << display_detail;
-            let mut display_ticker = 0;
+
+            let mut last_progress_update = Instant::now();
+            let mut total_writes = 0;
 
             'copy_loop: loop {
                 // Find next dirty index
@@ -143,21 +153,27 @@ impl<'s, 'd> Copier<'s, 'd> {
 
                         // We need to get the chunk here (synchronously) before we
                         // next consume the change queue.
-                        let chunk = self.source.get_chunk(index as u64 * self.chunk_size as u64, self.chunk_size);
+                        let chunk = self.source.get_chunk(index as u64 * self.config.chunk_size as u64, self.config.chunk_size);
 
                         write_queue_produce.send(chunk).expect("Writer thread died before it was relieved");
+                        total_writes += 1;
                     },
                 }
 
-                display_ticker += 1;
-                if display_ticker >= display_detail_size {
-                    display_ticker = 0;
-                    println!("Copying '{}' to '{}'\nProcessing as {} chunks of size {}\n{}", source_path.display(), destination_path.display(), chunk_count, self.chunk_size, chunk_tracker.summary_report(display_detail));
+                if last_progress_update.elapsed() >= self.config.progress_update_period {
+                    if self.config.exclusive_progress_updates {
+                        std::io::stdout().write_all(b"\x1b[2J").unwrap();
+                    }
+                    println!("Copying '{}' to '{}'\nProcessing as {} chunks of size {}\n{}", source_path.display(), destination_path.display(), chunk_count, self.config.chunk_size, chunk_tracker.summary_report(display_detail));
+                    println!("Chunk writes: {}", total_writes);
+                    last_progress_update = Instant::now();
                 }
             }
+            println!("Copying complete!");
+            println!("Chunk writes: {} (efficiency is {})", total_writes, chunk_count as f64 / total_writes as f64);
         }).unwrap();
-        // change_logger_thread.join().expect("Change logger thread paniced");
-        // writer_thread.join().expect("Writer thread paniced");
+
+        println!("All threads finished");
 
         Ok(())
     }

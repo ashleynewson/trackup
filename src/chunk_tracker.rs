@@ -67,11 +67,11 @@ impl ChunkTracker {
         for index in 0..checks {
             let flags = *self.chunks.get_aliased(index*factor, height);
             let character: char =
-                if flags & (FLAG_UNPROCESSED | FLAG_DIRTY) != 0 {
+                if flags & (FLAG_UNPROCESSED | FLAG_DIRTY) == (FLAG_UNPROCESSED | FLAG_DIRTY) {
                     ';'
-                } else if flags & FLAG_UNPROCESSED != 0 {
+                } else if flags & FLAG_UNPROCESSED == FLAG_UNPROCESSED {
                     '.'
-                } else if flags & FLAG_DIRTY != 0 {
+                } else if flags & FLAG_DIRTY == FLAG_DIRTY {
                     ','
                 } else {
                     '#'
@@ -84,6 +84,6 @@ impl ChunkTracker {
 
         let diagram_string: String = diagram.into_iter().collect();
 
-        format!("\nChunk map ({} chunks per cell):\n{}\n\nProgess: {}%\n", factor, diagram_string, done * 100 / checks)
+        format!("\nChunk map ({} chunks per cell):\n{}\n\nProgess: {}%\nUnprocessedDirty ;  Unprocessed .  Dirty ,  Done #\n", factor, diagram_string, done * 100 / checks)
     }
 }

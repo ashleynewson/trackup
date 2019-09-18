@@ -7,6 +7,7 @@ use chunk::Chunk;
 
 pub struct Device {
     pub dev: dev_t,
+    pub event_dev: u32,
     pub major: c_uint,
     pub minor: c_uint,
 }
@@ -36,8 +37,28 @@ impl Device {
             return Err(format!("Target device does not actually appear to be a device."));
         }
 
+        // dev_t is an opaque datatype. In fact, its size isn't even
+        // guaranteed to be consistent. However, we're always going to
+        // be getting a u32 in blk events, and that is a specific format
+        // which isn't obviously documented. However,in the source code
+        // for blktrace/blkparse, the major and minor device numbers are
+        // are handled using following macros:
+        //   #define MINORBITS   20
+        //   #define MINORMASK   ((1U << MINORBITS) - 1)
+        //   #define MAJOR(dev)  ((unsigned int) ((dev) >> MINORBITS))
+        //   #define MINOR(dev)  ((unsigned int) ((dev) & MINORMASK))
+        // Which is about as good a confirmation I can find for the
+        // format of blk event device codes.
+        if major >= (1 << 12) {
+            panic!("Major device number exceeds limits for tracing");
+        }
+        if minor >= (1 << 20) {
+            panic!("Minor device number exceeds limits for tracing");
+        }
+        let event_dev: u32 = (major << 20) | minor;
         Ok(Self{
             dev: stat_result.st_rdev,
+            event_dev,
             major,
             minor,
         })
