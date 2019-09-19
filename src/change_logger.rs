@@ -3,7 +3,7 @@ use std::sync::mpsc::{Receiver,Sender};
 use std::sync::{Arc,Barrier};
 use config::Config;
 use device::Device;
-use quick_io::{append_to_file_at_path,slurp_file_at_path};
+use quick_io::{append_to_file_at_path,slurp_file_at_path,fd_poll_read};
 use libc::{c_int,c_void,ssize_t,size_t};
 use std::ffi::CString;
 
@@ -37,6 +37,10 @@ const SUPPORTED_VERSION: u8 = 0x07;
 impl BlkEvent {
     fn try_read_from_file(trace_pipe_fd: c_int) -> Option<BlkEvent> {
         let event_size = ::std::mem::size_of::<BlkEvent>();
+        // Wait 1ms for something
+        if !fd_poll_read(trace_pipe_fd, 1) {
+            return None;
+        }
         let mut event = unsafe {
             let mut event: BlkEvent = ::std::mem::uninitialized();
             let buffer = ::std::slice::from_raw_parts_mut(&mut event as *mut BlkEvent as *mut u8, event_size);

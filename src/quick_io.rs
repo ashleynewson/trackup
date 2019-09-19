@@ -41,7 +41,7 @@ pub fn slurp_file_at_path(path: &Path) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
-pub fn fd_poll_read(fd: c_int) -> bool {
+pub fn fd_poll_read(fd: c_int, timeout_ms: c_int) -> bool {
     let mut pollfd = libc::pollfd{
         fd: fd,
         events: libc::POLLIN,
@@ -51,7 +51,7 @@ pub fn fd_poll_read(fd: c_int) -> bool {
         libc::poll(
             &mut pollfd as *mut libc::pollfd,
             1,
-            0
+            timeout_ms,
         )
     };
     match poll_ret {

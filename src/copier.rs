@@ -1,8 +1,8 @@
 use std::sync::mpsc::channel;
 use std::sync::mpsc::sync_channel;
-use std::sync::mpsc::TryRecvError;
+use std::sync::mpsc::{TryRecvError,TrySendError};
 use std::sync::{Arc,Barrier};
-use std::time::Instant;
+use std::time::{Duration,Instant};
 use std::io::Write;
 
 use config::Config;
@@ -42,7 +42,7 @@ impl<'c, 's, 'd> Copier<'c, 's, 'd> {
 
         let (change_queue_produce, change_queue_consume) = channel();
         // The sync channel size could possibly be enlarged.
-        let (write_queue_produce, write_queue_consume) = sync_channel(1);
+        let (write_queue_produce, write_queue_consume) = sync_channel(4);
         let (sync_barrier_produce, sync_barrier_consume) = channel();
 
         crossbeam::scope(|thread_scope| {
@@ -152,16 +152,31 @@ impl<'c, 's, 'd> Copier<'c, 's, 'd> {
                     Some(index) => {
                         synced = false;
 
-                        // Clear here, so it has a change to get re-marked as dirty.
+                        // Clear here, so it has a chance to get re-marked as
+                        // dirty in case it's written to whilst we read it.
                         chunk_tracker.clear_chunk(index);
 
-                        update_chunk_tracker(&mut chunk_tracker);
+                        let mut chunk = Some(self.source.get_chunk(index as u64 * self.config.chunk_size as u64, self.config.chunk_size));
 
-                        // We need to get the chunk here (synchronously) before we
-                        // next consume the change queue.
-                        let chunk = self.source.get_chunk(index as u64 * self.config.chunk_size as u64, self.config.chunk_size);
+                        'write_try_loop: loop {
+                            update_chunk_tracker(&mut chunk_tracker);
 
-                        write_queue_produce.send(chunk).expect("Writer thread died before it was relieved");
+                            match write_queue_produce.try_send(chunk.take().unwrap()) {
+                                Ok(()) => {
+                                    break 'write_try_loop;
+                                },
+                                Err(TrySendError::Full(bounced)) => {
+                                    // Put back the chunk.
+                                    chunk.replace(bounced);
+                                    // Might as well not hammer the CPU if
+                                    // we're waiting on something.
+                                    std::thread::sleep(Duration::from_millis(1));
+                                },
+                                Err(TrySendError::Disconnected(_)) => {
+                                    panic!("Writer thread died before it was relieved");
+                                },
+                            }
+                        }
                         total_writes += 1;
                     },
                 }
