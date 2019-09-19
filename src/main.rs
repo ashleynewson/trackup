@@ -89,6 +89,13 @@ fn main() {
                 .help("Clear screen before each progress update")
                 .takes_value(false)
         )
+        .arg(
+            clap::Arg::with_name("reuse")
+                .short("r")
+                .long("reuse")
+                .help("Write over an existing output file/device (requires the file to be present). By default, any existing file will be deleted, and a new file will be pre-allocated.")
+                .takes_value(false)
+        )
         .get_matches();
 
     let source      = PathBuf::from(matches.value_of("in").unwrap());
@@ -100,6 +107,7 @@ fn main() {
     let progress_update_period = Duration::from_secs(matches.value_of("progress-period").unwrap().parse().unwrap());
     let exclusive_progress_updates = matches.is_present("exclusive-progress-updates");
     let max_diagram_size: usize = matches.value_of("max-diagram-size").unwrap().parse().unwrap();
+    let reuse_output = matches.is_present("reuse");
 
     let config = Config {
         source: source.as_path(),
@@ -111,6 +119,7 @@ fn main() {
         progress_update_period,
         exclusive_progress_updates,
         max_diagram_size,
+        reuse_output,
     };
 
     if let Err(_) = trackup::backup_device(&config) {

@@ -18,21 +18,19 @@ impl BackupFile {
                 return Err(format!("Could not create backup file"));
             },
         };
-        // let fd = file.try_clone().unwrap().into_raw_fd();
 
-        if let Err(_) = nix::fcntl::fallocate(
+        if let Err(e) = nix::fcntl::fallocate(
             file.try_clone().unwrap().into_raw_fd(),
             nix::fcntl::FallocateFlags::FALLOC_FL_ZERO_RANGE,
             0,
             size as i64,
         ) {
-            return Err(format!("Could not pre-allocate backup file"));
+            return Err(format!("Could not pre-allocate backup file: {:?}", e));
         }
 
         Ok(Self{
             path: path.to_path_buf(),
             file,
-            // fd,
         })
     }
 
@@ -40,10 +38,9 @@ impl BackupFile {
         let mut file = match std::fs::OpenOptions::new().write(true).open(path) {
             Ok(x) => x,
             Err(_) => {
-                return Err(format!("Could not open backup file"));
+                return Err(format!("Could not open (reuse) backup file"));
             },
         };
-        // let fd = file.try_clone().unwrap().into_raw_fd();
 
         let existing_size = file.seek(SeekFrom::End(0)).expect("Could not determine file size");
         file.seek(SeekFrom::Start(0)).expect("Could not seek back to beginning of backup file");
@@ -55,7 +52,6 @@ impl BackupFile {
         Ok(Self {
             path: path.to_path_buf(),
             file,
-            // fd,
         })
     }
 

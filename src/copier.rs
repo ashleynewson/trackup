@@ -50,17 +50,23 @@ impl<'c, 's, 'd> Copier<'c, 's, 'd> {
                 let device_ref = &device;
                 let config = self.config;
 
-                thread_scope.spawn(move |_| {
-                    let change_logger = ChangeLogger::new(config, device_ref);
-                    change_logger.run(change_queue_produce, sync_barrier_consume);
-                });
+                thread_scope.builder()
+                    .name("change-logger".to_string())
+                    .spawn(move |_| {
+                        let change_logger = ChangeLogger::new(config, device_ref);
+                        change_logger.run(change_queue_produce, sync_barrier_consume);
+                    })
+                    .unwrap();
             }
             {
                 let destination = &mut self.destination;
-                thread_scope.spawn(move |_| {
-                    let mut writer = Writer::new(*destination);
-                    writer.run(write_queue_consume);
-                });
+                thread_scope.builder()
+                    .name("writer".to_string())
+                    .spawn(move |_| {
+                        let mut writer = Writer::new(*destination);
+                        writer.run(write_queue_consume);
+                    })
+                    .unwrap();
             }
 
             // Constrain the lifetime of our producers/consumers so that

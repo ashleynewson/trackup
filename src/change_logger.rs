@@ -240,7 +240,9 @@ impl<'c, 'd> ChangeLogger<'c, 'd> {
                 },
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     // Does not block
-                    consume_event();
+                    if !consume_event() {
+                        std::thread::yield_now();
+                    }
                 },
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     continuing.set(false);

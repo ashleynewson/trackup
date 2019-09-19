@@ -11,4 +11,5 @@ pub struct Config<'c> {
     pub progress_update_period: Duration,
     pub exclusive_progress_updates: bool,
     pub max_diagram_size: usize,
+    pub reuse_output: bool,
 }
