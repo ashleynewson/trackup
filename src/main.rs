@@ -4,6 +4,7 @@ extern crate clap;
 use std::path::PathBuf;
 use std::time::Duration;
 use trackup::config::Config;
+use trackup::job::Job;
 
 fn main() {
     let matches = clap::App::new(env!("CARGO_PKG_NAME"))
@@ -11,21 +12,14 @@ fn main() {
         .author(env!("CARGO_PKG_AUTHORS"))
         .about("Snapshotless device backup")
         .arg(
-            clap::Arg::with_name("in")
-                .short("i")
-                .long("in")
-                .value_name("SOURCE")
-                .help("Input block device")
+            clap::Arg::with_name("copy")
+                .short("f")
+                .long("copy")
+                .value_names(&["SOURCE", "DESTINATION"])
+                .help("Input block device and output file or block device to copy. Can be specified multiple times to copy multiple block devices.")
                 .takes_value(true)
-                .required(true)
-        )
-        .arg(
-            clap::Arg::with_name("out")
-                .short("o")
-                .long("out")
-                .value_name("DESTINATION")
-                .help("Output file (or block device)")
-                .takes_value(true)
+                .number_of_values(2)
+                .multiple(true)
                 .required(true)
         )
         .arg(
@@ -98,8 +92,15 @@ fn main() {
         )
         .get_matches();
 
-    let source      = PathBuf::from(matches.value_of("in").unwrap());
-    let destination = PathBuf::from(matches.value_of("out").unwrap());
+    let mut copy_it = matches.values_of("copy").unwrap();
+    let mut jobs = Vec::new();
+    while let (Some(source), Some(destination)) = (copy_it.next(), copy_it.next()) {
+        jobs.push(Job {
+            source: PathBuf::from(source),
+            destination: PathBuf::from(destination),
+        });
+    }
+
     let chunk_size: usize = matches.value_of("chunk-size").unwrap().parse().unwrap();
     let tracing_path = PathBuf::from(matches.value_of("tracing-path").unwrap());
     let sys_path = PathBuf::from(matches.value_of("sys-path").unwrap());
@@ -110,8 +111,7 @@ fn main() {
     let reuse_output = matches.is_present("reuse");
 
     let config = Config {
-        source: source.as_path(),
-        destination: destination.as_path(),
+        jobs: &jobs,
         chunk_size,
         tracing_path: tracing_path.as_path(),
         sys_path: sys_path.as_path(),

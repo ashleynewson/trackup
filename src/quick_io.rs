@@ -41,6 +41,25 @@ pub fn slurp_file_at_path(path: &Path) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
+pub fn slurp_and_parse_file_at_path<T: std::str::FromStr>(path: &Path) -> Result<T, String> {
+    let buf = slurp_file_at_path(path)?;
+    match std::str::from_utf8(&buf[0..buf.len()-1]) {
+        Ok(s) => {
+            match s.parse::<T>() {
+                Ok(p) => {
+                    Ok(p)
+                },
+                Err(_) => {
+                    Err(format!("Data '{}' from file '{}' could not be parsed", s, path.display()))
+                }
+            }
+        },
+        Err(_) => {
+            Err(format!("Slurped file '{}' is not valid utf8", path.display()))
+        }
+    }
+}
+
 pub fn fd_poll_read(fd: c_int, timeout_ms: c_int) -> bool {
     let mut pollfd = libc::pollfd{
         fd: fd,

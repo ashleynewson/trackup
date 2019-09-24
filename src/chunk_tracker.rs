@@ -22,6 +22,10 @@ impl ChunkTracker {
         }
     }
 
+    pub fn get_chunk_count(&self) -> usize {
+        self.chunk_count
+    }
+
     // pub fn consume_dirty_queue(&mut self, change_log: &mut ChunkLog) {
     //     while let Some(index) = change_log.consume() {
     //         mark_chunk
@@ -84,6 +88,6 @@ impl ChunkTracker {
 
         let diagram_string: String = diagram.into_iter().collect();
 
-        format!("\nChunk map ({} chunks per cell):\n{}\n\nProgess: {}%\nUnprocessedDirty ;  Unprocessed .  Dirty ,  Done #\n", factor, diagram_string, done * 100 / checks)
+        format!("\nChunk map ({} chunks per cell):\n{}\n\nProgess: {}%\n", factor, diagram_string, done * 100 / checks)
     }
 }

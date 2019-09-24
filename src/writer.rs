@@ -3,19 +3,19 @@ use std::sync::mpsc::Receiver;
 use backup_file::BackupFile;
 
 pub struct Writer<'d> {
-    destination: &'d mut BackupFile,
+    destinations: &'d mut Vec<BackupFile>,
 }
 
 impl<'d> Writer<'d> {
-    pub fn new(destination: &'d mut BackupFile) -> Self {
+    pub fn new(destinations: &'d mut Vec<BackupFile>) -> Self {
         Writer {
-            destination,
+            destinations,
         }
     }
 
-    pub fn run(&mut self, write_queue_consume: Receiver<Chunk>) {
-        while let Ok(chunk) = write_queue_consume.recv() {
-            self.destination.write_chunk(chunk);
+    pub fn run(&mut self, write_queue_consume: Receiver<(usize, Chunk)>) {
+        while let Ok((device_number, chunk)) = write_queue_consume.recv() {
+            self.destinations[device_number].write_chunk(chunk);
         }
     }
 }

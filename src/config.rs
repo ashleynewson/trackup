@@ -1,9 +1,9 @@
 use std::path::Path;
 use std::time::Duration;
+use job::Job;
 
 pub struct Config<'c> {
-    pub source: &'c Path,
-    pub destination: &'c Path,
+    pub jobs: &'c Vec<Job>,
     pub chunk_size: usize,
     pub tracing_path: &'c Path,
     pub sys_path: &'c Path,

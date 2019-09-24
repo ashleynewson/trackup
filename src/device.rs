@@ -4,12 +4,19 @@ use libc::{c_uint,dev_t};
 use std::io::{Read,Seek,SeekFrom};
 use std::ffi::CString;
 use chunk::Chunk;
+use config::Config;
+use quick_io::{slurp_file_at_path,slurp_and_parse_file_at_path};
 
 pub struct Device {
     pub dev: dev_t,
     pub event_dev: u32,
     pub major: c_uint,
     pub minor: c_uint,
+    pub sys_dev_path: PathBuf,
+    pub sector_count: u64,
+    pub start_sector: u64,
+    pub end_sector: u64,
+    pub parent: Option<Box<Device>>, // If our device is a partition, this will represent the whole-disk.
 }
 
 pub struct DeviceFile {
@@ -20,7 +27,7 @@ pub struct DeviceFile {
 }
 
 impl Device {
-    pub fn from_file(device_file: &DeviceFile) -> Result<Self, String> {
+    pub fn from_file(config: &Config, device_file: &DeviceFile) -> Result<Self, String> {
         let cpath = CString::new(device_file.path.to_str().unwrap()).unwrap();
         let stat_result = unsafe {
             let mut stat_result: libc::stat = ::std::mem::uninitialized();
@@ -55,13 +62,85 @@ impl Device {
         if minor >= (1 << 20) {
             panic!("Minor device number exceeds limits for tracing");
         }
+        Self::from_major_minor(config, major, minor)
+    }
+
+    pub fn from_major_minor(config: &Config, major: c_uint, minor: c_uint) -> Result<Self,String> {
+        let dev: dev_t = unsafe {libc::makedev(major, minor)};
         let event_dev: u32 = (major << 20) | minor;
+        let sys_dev_path = config.sys_path.join("dev/block").join(&format!("{}:{}", major, minor));
+        let sector_count = slurp_and_parse_file_at_path(&sys_dev_path.join("size")).unwrap();
+        let is_partition = sys_dev_path.join("partition").exists();
+        let start_sector: u64 =
+            if is_partition {
+                // This device doesn't cover the entire lba space (i.e. a partition)
+                slurp_and_parse_file_at_path(&sys_dev_path.join("start")).unwrap()
+            } else {
+                // In theory, this is a device which covers an entire lba space
+                0
+            };
+        let end_sector: u64 = start_sector + sector_count;
+        let parent =
+            if is_partition {
+                let parent_major_minor_buf = slurp_file_at_path(&sys_dev_path.join("../dev")).unwrap();
+                let mut parent_major_minor =
+                    std::str::from_utf8(&parent_major_minor_buf[0..parent_major_minor_buf.len()-1])
+                    .unwrap()
+                    .split(":")
+                    .map(|string| {string.parse().unwrap()});
+                let parent_major: c_uint = parent_major_minor.next().unwrap();
+                let parent_minor: c_uint = parent_major_minor.next().unwrap();
+                Some(Box::new(Self::from_major_minor(config, parent_major, parent_minor).unwrap()))
+            } else {
+                None
+            };
+
         Ok(Self{
-            dev: stat_result.st_rdev,
+            dev,
             event_dev,
             major,
             minor,
+            sys_dev_path,
+            sector_count,
+            start_sector,
+            end_sector,
+            parent,
         })
+    }
+
+    /// Return the ultimate ancestor (i.e. the device representing the whole disk)
+    pub fn get_base_device<'s>(&'s self) -> &'s Device {
+        // Will there ever be more than one level?
+        match &self.parent {
+            None => {
+                self
+            },
+            Some(parent) => {
+                parent.get_base_device()
+            },
+        }
+    }
+}
+
+impl std::cmp::PartialEq for Device {
+    fn eq(&self, other: &Self) -> bool {
+        self.dev == other.dev
+    }
+}
+impl std::cmp::Eq for Device {}
+impl std::cmp::Ord for Device {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.dev.cmp(&other.dev)
+    }
+}
+impl std::cmp::PartialOrd for Device {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl std::hash::Hash for Device {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.dev.hash(state);
     }
 }
 
