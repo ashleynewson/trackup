@@ -196,9 +196,15 @@ impl<'c, 's, 'd> Copier<'c, 's, 'd> {
                                     std::io::stdout().write_all(b"\x1b[2J").unwrap();
                                 }
                                 for i in 0..number_of_devices {
-                                    println!("Copying '{}' to '{}'\nProcessing as {} chunks of size {}\n{}", source_paths[i].display(), destination_paths[i].display(), chunk_trackers[i].get_chunk_count(), self.config.chunk_size, chunk_trackers[i].summary_report(display_detail));
+                                    println!("Copying '{}' to '{}'\nProcessing as {} chunks of size {}\n{}", source_paths[i].display(), destination_paths[i].display(), chunk_trackers[i].get_chunk_count(), self.config.chunk_size, chunk_trackers[i].summary_report(self.config, display_detail));
                                 }
-                                println!("UnprocessedDirty ;  Unprocessed .  Dirty ,  Done #");
+                                println!(
+                                    "Done {}{}   Dirty {}{}   Unprocessed {}{}   UnprocessedDirty {}{}",
+                                    self.config.diagram_cells[0], self.config.diagram_cells_reset,
+                                    self.config.diagram_cells[1], self.config.diagram_cells_reset,
+                                    self.config.diagram_cells[2], self.config.diagram_cells_reset,
+                                    self.config.diagram_cells[3], self.config.diagram_cells_reset
+                                );
                                 println!("Chunk writes: {}", total_writes);
                                 last_progress_update = Instant::now();
                             }

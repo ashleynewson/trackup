@@ -1,4 +1,5 @@
 use alias_tree::AliasTree;
+use config::Config;
 
 pub struct ChunkTracker {
     chunk_count: usize,
@@ -60,34 +61,22 @@ impl ChunkTracker {
         self.chunks.find_next(|x|{*x!=0}, start)
     }
 
-    pub fn summary_report(&self, height: usize) -> String {
+    pub fn summary_report(&self, config: &Config, height: usize) -> String {
         // BUG: If the chunk count isn't a multiple of 1<<height, the last chunk may not be representative.
         let factor: usize = 1 << height;
         let checks = (self.chunk_count-1)/factor+1;
 
-        let mut diagram: Vec<char> = Vec::with_capacity(checks);
+        let mut diagram = String::with_capacity(checks * 7);
         let mut done = 0;
 
         for index in 0..checks {
             let flags = *self.chunks.get_aliased(index*factor, height);
-            let character: char =
-                if flags & (FLAG_UNPROCESSED | FLAG_DIRTY) == (FLAG_UNPROCESSED | FLAG_DIRTY) {
-                    ';'
-                } else if flags & FLAG_UNPROCESSED == FLAG_UNPROCESSED {
-                    '.'
-                } else if flags & FLAG_DIRTY == FLAG_DIRTY {
-                    ','
-                } else {
-                    '#'
-                };
-            diagram.push(character);
+            diagram.push_str(&config.diagram_cells[flags as usize]);
             if flags == 0 {
                 done += 1;
             }
         }
 
-        let diagram_string: String = diagram.into_iter().collect();
-
-        format!("\nChunk map ({} chunks per cell):\n{}\n\nProgess: {}%\n", factor, diagram_string, done * 100 / checks)
+        format!("\nChunk map ({} chunks per cell):\n{}{}\n\nProgess: {}%\n", factor, diagram, config.diagram_cells_reset, done * 100 / checks)
     }
 }

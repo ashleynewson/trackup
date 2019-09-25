@@ -12,4 +12,9 @@ pub struct Config<'c> {
     pub exclusive_progress_updates: bool,
     pub max_diagram_size: usize,
     pub reuse_output: bool,
+    pub diagram_cells: &'c [&'c str; 4],
+    pub diagram_cells_reset: &'c str,
 }
+
+pub const PLAIN_DIAGRAM_CELLS: [&str; 4] = ["#", "*", ".", "o"];
+pub const COLOR_DIAGRAM_CELLS: [&str; 4] = ["\x1b[42m#", "\x1b[41m*", "\x1b[100m.", "\x1b[44mo"];

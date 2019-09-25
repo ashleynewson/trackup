@@ -72,7 +72,7 @@ fn main() {
                 .short("d")
                 .long("max-diagram-size")
                 .value_name("SECONDS")
-                .help("Maximum number of characters to use for progress diagram")
+                .help("Maximum number of characters to use for each progress diagram")
                 .takes_value(true)
                 .default_value("1024")
         )
@@ -88,6 +88,13 @@ fn main() {
                 .short("r")
                 .long("reuse")
                 .help("Write over an existing output file/device (requires the file to be present). By default, any existing file will be deleted, and a new file will be pre-allocated.")
+                .takes_value(false)
+        )
+        .arg(
+            clap::Arg::with_name("color")
+                .short("C")
+                .long("color")
+                .help("Display diagrams in color")
                 .takes_value(false)
         )
         .get_matches();
@@ -109,6 +116,14 @@ fn main() {
     let exclusive_progress_updates = matches.is_present("exclusive-progress-updates");
     let max_diagram_size: usize = matches.value_of("max-diagram-size").unwrap().parse().unwrap();
     let reuse_output = matches.is_present("reuse");
+    let color_mode = matches.is_present("color");
+
+    let diagram_cells =
+        if color_mode {
+            &trackup::config::COLOR_DIAGRAM_CELLS
+        } else {
+            &trackup::config::PLAIN_DIAGRAM_CELLS
+        };
 
     let config = Config {
         jobs: &jobs,
@@ -120,6 +135,8 @@ fn main() {
         exclusive_progress_updates,
         max_diagram_size,
         reuse_output,
+        diagram_cells: diagram_cells,
+        diagram_cells_reset: if color_mode {"\x1b[m"} else {""},
     };
 
     if let Err(_) = trackup::backup_device(&config) {
