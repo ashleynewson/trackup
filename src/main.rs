@@ -1,10 +1,12 @@
 extern crate trackup;
 extern crate clap;
 
-use std::path::PathBuf;
+use std::path::{Path,PathBuf};
 use std::time::Duration;
 use trackup::config::Config;
 use trackup::job::Job;
+use trackup::control::ManagementInterface;
+use trackup::control::Manifest;
 
 fn main() {
     let matches = clap::App::new(env!("CARGO_PKG_NAME"))
@@ -20,7 +22,7 @@ fn main() {
                 .takes_value(true)
                 .number_of_values(2)
                 .multiple(true)
-                .required(true)
+                .required_unless("daemon")
         )
         .arg(
             clap::Arg::with_name("chunk-size")
@@ -72,7 +74,7 @@ fn main() {
                 .short("d")
                 .long("max-diagram-size")
                 .value_name("SECONDS")
-                .help("Maximum number of characters to use for each progress diagram")
+                .help("Maximum number of characters to use for progress diagrams")
                 .takes_value(true)
                 .default_value("1024")
         )
@@ -97,7 +99,26 @@ fn main() {
                 .help("Display diagrams in color")
                 .takes_value(false)
         )
+        .arg(
+            clap::Arg::with_name("management-socket")
+                .short("m")
+                .long("management-socket")
+                .value_name("SOCKET_PATH")
+                .help("Unix socket to use for management")
+                .takes_value(true)
+        )
+        .arg(
+            clap::Arg::with_name("daemon")
+                .short("D")
+                .long("daemon")
+                .help("Start a backup daemon")
+                .takes_value(false)
+                .requires("management-socket")
+        )
         .get_matches();
+
+    let chunk_size: usize = matches.value_of("chunk-size").unwrap().parse().unwrap();
+    let reuse_output = matches.is_present("reuse");
 
     let mut copy_it = matches.values_of("copy").unwrap();
     let mut jobs = Vec::new();
@@ -105,41 +126,68 @@ fn main() {
         jobs.push(Job {
             source: PathBuf::from(source),
             destination: PathBuf::from(destination),
+            chunk_size,
+            reuse_output,
         });
     }
 
-    let chunk_size: usize = matches.value_of("chunk-size").unwrap().parse().unwrap();
     let tracing_path = PathBuf::from(matches.value_of("tracing-path").unwrap());
     let sys_path = PathBuf::from(matches.value_of("sys-path").unwrap());
     let trace_buffer_size: usize = matches.value_of("trace-buffer-size").unwrap().parse().unwrap();
     let progress_update_period = Duration::from_secs(matches.value_of("progress-period").unwrap().parse().unwrap());
     let exclusive_progress_updates = matches.is_present("exclusive-progress-updates");
     let max_diagram_size: usize = matches.value_of("max-diagram-size").unwrap().parse().unwrap();
-    let reuse_output = matches.is_present("reuse");
     let color_mode = matches.is_present("color");
+    let daemon_mode = matches.is_present("daemon");
 
     let diagram_cells =
         if color_mode {
             &trackup::config::COLOR_DIAGRAM_CELLS
         } else {
             &trackup::config::PLAIN_DIAGRAM_CELLS
-        };
+        }
+        .iter()
+        .map(|x| {String::from(*x)})
+        .collect();
 
     let config = Config {
-        jobs: &jobs,
-        chunk_size,
-        tracing_path: tracing_path.as_path(),
-        sys_path: sys_path.as_path(),
+        tracing_path,
+        sys_path,
         trace_buffer_size,
         progress_update_period,
         exclusive_progress_updates,
         max_diagram_size,
-        reuse_output,
-        diagram_cells: diagram_cells,
-        diagram_cells_reset: if color_mode {"\x1b[m"} else {""},
+        diagram_cells,
+        diagram_cells_reset: String::from(if color_mode {"\x1b[m"} else {""}),
+    };
+    let manifest = Manifest {
+        jobs,
     };
 
-    if let Err(_) = trackup::backup_device(&config) {
-        eprintln!("Backup failed");
+    nix::sys::mman::mlockall(nix::sys::mman::MlockAllFlags::all()).expect("Could not mlock pages in RAM. (Are you root?)");
+
+    let management_interface =
+        match matches.value_of("management-socket") {
+            Some(path) => {
+                trackup::server::start_server(Path::new(path))
+            },
+            None => {
+                ManagementInterface::new(None)
+            },
+        };
+
+    if daemon_mode {
+        let optional_manifest =
+            if manifest.jobs.len() > 0 {
+                Some(manifest)
+            } else {
+                None
+            };
+        trackup::server::task_loop(&config, &management_interface, optional_manifest);
+    } else {
+        eprintln!("Starting backup");
+        if let Err(e) = trackup::copier::run(&config, &manifest, &management_interface) {
+            eprintln!("Backup failed: {:?}", e);
+        }
     }
 }

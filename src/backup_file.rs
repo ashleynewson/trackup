@@ -2,7 +2,7 @@ use std::path::{Path,PathBuf};
 use std::fs::File;
 use std::io::{Write,Seek,SeekFrom};
 use std::os::unix::io::IntoRawFd;
-use chunk::Chunk;
+use crate::chunk::Chunk;
 
 pub struct BackupFile {
     path: PathBuf,

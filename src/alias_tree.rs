@@ -88,7 +88,6 @@ impl<T: Clone + std::ops::BitOr<Output=T> + std::ops::BitAnd<Output=T> + std::cm
         &self.levels[level][coarse_index]
     }
 
-    // pub fn find_next(mask: T, start: usize) {
     pub fn find_next<C: Fn(&T) -> bool>(&self, condition: C, start: usize) -> Option<usize> {
         if start >= self.levels[0].len() {
             return None;

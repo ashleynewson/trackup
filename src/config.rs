@@ -1,19 +1,17 @@
-use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
-use job::Job;
+use serde::{Serialize,Deserialize};
 
-pub struct Config<'c> {
-    pub jobs: &'c Vec<Job>,
-    pub chunk_size: usize,
-    pub tracing_path: &'c Path,
-    pub sys_path: &'c Path,
+#[derive(Clone,Serialize,Deserialize)]
+pub struct Config {
+    pub tracing_path: PathBuf,
+    pub sys_path: PathBuf,
     pub trace_buffer_size: usize,
     pub progress_update_period: Duration,
     pub exclusive_progress_updates: bool,
     pub max_diagram_size: usize,
-    pub reuse_output: bool,
-    pub diagram_cells: &'c [&'c str; 4],
-    pub diagram_cells_reset: &'c str,
+    pub diagram_cells: Vec<String>,
+    pub diagram_cells_reset: String,
 }
 
 pub const PLAIN_DIAGRAM_CELLS: [&str; 4] = ["#", "*", ".", "o"];

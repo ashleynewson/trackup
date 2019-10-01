@@ -1,5 +1,5 @@
-use alias_tree::AliasTree;
-use config::Config;
+use crate::alias_tree::AliasTree;
+use crate::config::Config;
 
 pub struct ChunkTracker {
     chunk_count: usize,
@@ -79,4 +79,26 @@ impl ChunkTracker {
 
         format!("\nChunk map ({} chunks per cell):\n{}{}\n\nProgess: {}%\n", factor, diagram, config.diagram_cells_reset, done * 100 / checks)
     }
+
+    pub fn snapshot_level(&self, height: usize) -> Vec<u8> {
+        let factor: usize = 1 << height;
+        let checks = (self.chunk_count-1)/factor+1;
+        let mut cells = Vec::with_capacity(checks);
+        for index in 0..checks {
+            cells.push(*self.chunks.get_aliased(index*factor, height));
+        }
+        cells
+    }
+}
+
+pub fn calculate_display_detail(chunk_count: usize, limit: usize) -> usize {
+    (
+        if chunk_count <= limit {
+            0
+        } else {
+            // Mathematically, the first ceil isn't necessary, but I'm
+            // being (likely unnecessarily) paranoid about precision.
+            (chunk_count as f64 / limit as f64).ceil().log2().ceil() as u64
+        } as usize
+    )
 }

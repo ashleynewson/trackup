@@ -6,142 +6,189 @@ use std::time::{Duration,Instant};
 use std::io::Write;
 use std::path::PathBuf;
 
-use config::Config;
-use device::{Device,DeviceFile};
-use backup_file::BackupFile;
-use chunk_tracker::ChunkTracker;
-use writer::Writer;
-use change_logger::ChangeLogger;
+use crate::config::Config;
+use crate::device::{Device,DeviceFile};
+use crate::backup_file::BackupFile;
+use crate::chunk_tracker::{ChunkTracker,calculate_display_detail};
+use crate::control::{Request,Response,Status,RunStatus,JobProgress,ManagementInterface,Manifest};
 
-pub struct Copier<'c, 's, 'd> {
-    config: &'c Config<'c>,
-    sources: &'s mut Vec<DeviceFile>,
-    destinations: &'d mut Vec<BackupFile>,
-}
 
-impl<'c, 's, 'd> Copier<'c, 's, 'd> {
-    pub fn new(config: &'c Config, sources: &'s mut Vec<DeviceFile>, destinations: &'d mut Vec<BackupFile>) -> Self {
-        Copier {
-            config,
-            sources,
-            destinations,
-        }
+pub fn run(config: &Config, manifest: &Manifest, management_interface: &ManagementInterface) -> Result<(),()> {
+    let mut sources = Vec::new();
+    let mut destinations = Vec::new();
+    for job in &manifest.jobs {
+        let source = DeviceFile::from_path(&job.source).expect("Could not open device");
+        destinations.push(
+            if job.reuse_output {
+                BackupFile::use_file(&job.destination, source.get_size()).expect("Could not open backup file (reuse)")
+            } else {
+                BackupFile::create_file(&job.destination, source.get_size()).expect("Could not open backup file (create)")
+            }
+        );
+        sources.push(source);
     }
 
-    pub fn run(&mut self) -> Result<(),()> {
-        let number_of_devices = self.sources.len();
+    let number_of_devices = sources.len();
 
-        let source_paths: Vec<PathBuf> = self.sources.iter().map(
-            |source| {source.get_path().to_path_buf()}
-        ).collect();
-        let destination_paths: Vec<PathBuf> = self.destinations.iter().map(
-            |destination| {destination.get_path().to_path_buf()}
-        ).collect();
+    let source_paths: Vec<PathBuf> = sources.iter().map(
+        |source| {source.get_path().to_path_buf()}
+    ).collect();
+    let destination_paths: Vec<PathBuf> = destinations.iter().map(
+        |destination| {destination.get_path().to_path_buf()}
+    ).collect();
 
-        let devices = self.sources.iter().map(
-            |source| {
-                Device::from_file(self.config, source).unwrap()
+    let devices = sources.iter().map(
+        |source| {
+            Device::from_file(config, source).unwrap()
+        }
+    ).collect();
+
+    let mut total_chunk_count = 0;
+    let mut chunk_trackers = sources.iter().enumerate().map(
+        |(i, source)| {
+            let chunk_size: u64 = manifest.jobs[i].chunk_size as u64;
+            let bytes: u64 = source.get_size();
+            let chunk_count: usize = (
+                bytes / chunk_size + (if bytes % chunk_size != 0 {1} else {0})
+            ) as usize;
+
+            total_chunk_count += chunk_count;
+
+            ChunkTracker::new(chunk_count)
+        }
+    ).collect();
+    let total_chunk_count = total_chunk_count; // drop mut
+
+    let (change_queue_produce, change_queue_consume) = channel();
+    // The sync channel size could possibly be enlarged.
+    let (write_queue_produce, write_queue_consume) = sync_channel(4);
+    let (sync_barrier_produce, sync_barrier_consume) = channel();
+
+    crossbeam::scope(|thread_scope| {
+        {
+            let devices_ref = &devices;
+            let config = config; // copy the ref
+
+            thread_scope.builder()
+                .name("change-logger".to_string())
+                .spawn(move |_| {
+                    crate::change_logger::run(config, manifest, devices_ref, change_queue_produce, sync_barrier_consume);
+                })
+                .unwrap();
+        }
+        {
+            let destinations = &mut destinations;
+            thread_scope.builder()
+                .name("writer".to_string())
+                .spawn(move |_| {
+                    crate::writer::run(destinations, write_queue_consume);
+                })
+                .unwrap();
+        }
+
+        // Constrain the lifetime of our producers/consumers so that
+        // the child threads can witness a disconnect.
+        let sync_barrier_produce = sync_barrier_produce;
+        let write_queue_produce = write_queue_produce;
+        // We don't need to constrain change_queue as it doesn't
+        // strictly control any looping behaviour.
+
+        let display_detail: usize = calculate_display_detail(total_chunk_count, config.max_diagram_size);
+
+        let update_chunk_trackers = |chunk_trackers: &mut Vec<ChunkTracker>| {
+            'drain_change_queue: loop {
+                match change_queue_consume.try_recv() {
+                    Ok((device_number, change_index)) => {
+                        chunk_trackers[device_number].mark_chunk(change_index);
+                    },
+                    Err(TryRecvError::Empty) => {
+                        break 'drain_change_queue;
+                    },
+                    Err(_) => {
+                        panic!("Unexpected error reading change queue");
+                    },
+                }
             }
-        ).collect();
+        };
 
-        let mut total_chunk_count = 0;
-        let mut chunk_trackers = self.sources.iter().map(
-            |source| {
-                let chunk_count: usize = (
-                    source.get_size() / (self.config.chunk_size as u64)
-                        + if source.get_size() % (self.config.chunk_size as u64) != 0 {1} else {0}
-                ) as usize;
+        let mut cancelled = false;
+        let mut paused = false;
 
-                total_chunk_count += chunk_count;
+        let handle_management_tickets =
+            |cancelled: &mut bool, paused: &mut bool, chunk_trackers: &Vec<ChunkTracker>| {
+                while let Some(ticket) = management_interface.get_ticket() {
+                    let response =
+                        match &ticket.request {
+                            Request::Start(_) => {
+                                Response::Start(Err(String::from("A backup is already running.")))
+                            },
+                            Request::Cancel => {
+                                *cancelled = true;
+                                Response::Cancel(Ok(()))
+                            },
+                            Request::Pause => {
+                                *paused = true;
+                                Response::Pause(Ok(()))
+                            },
+                            Request::Resume => {
+                                *paused = false;
+                                Response::Resume(Ok(()))
+                            },
+                            Request::Query(query) => {
+                                let progress =
+                                    manifest.jobs.iter().zip(chunk_trackers).map(
+                                        |(job, chunk_tracker)| {
+                                            let chunk_count = chunk_tracker.get_chunk_count();
+                                            let detail = calculate_display_detail(chunk_count, query.max_diagram_size);
+                                            JobProgress {
+                                                job: job.clone(),
+                                                chunk_count,
+                                                cells: chunk_tracker.snapshot_level(detail),
+                                                chunks_per_cell: 1 << detail,
+                                            }
+                                        }
+                                    ).collect();
 
-                ChunkTracker::new(chunk_count)
-            }
-        ).collect();
+                                let run_status = RunStatus {
+                                    manifest: manifest.clone(),
+                                    progress,
+                                    paused: *paused,
+                                };
 
-        let (change_queue_produce, change_queue_consume) = channel();
-        // The sync channel size could possibly be enlarged.
-        let (write_queue_produce, write_queue_consume) = sync_channel(4);
-        let (sync_barrier_produce, sync_barrier_consume) = channel();
-
-        crossbeam::scope(|thread_scope| {
-            {
-                let devices_ref = &devices;
-                let config = self.config;
-
-                thread_scope.builder()
-                    .name("change-logger".to_string())
-                    .spawn(move |_| {
-                        let change_logger = ChangeLogger::new(config, devices_ref);
-                        change_logger.run(change_queue_produce, sync_barrier_consume);
-                    })
-                    .unwrap();
-            }
-            {
-                let destinations = &mut self.destinations;
-                thread_scope.builder()
-                    .name("writer".to_string())
-                    .spawn(move |_| {
-                        let mut writer = Writer::new(*destinations);
-                        writer.run(write_queue_consume);
-                    })
-                    .unwrap();
-            }
-
-            // Constrain the lifetime of our producers/consumers so that
-            // the child threads can witness a disconnect.
-            let sync_barrier_produce = sync_barrier_produce;
-            let write_queue_produce = write_queue_produce;
-            // We don't need to constrain change_queue as it doesn't
-            // strictly control any looping behaviour.
-
-            let update_chunk_trackers = |chunk_trackers: &mut Vec<ChunkTracker>| {
-                'drain_change_queue: loop {
-                    match change_queue_consume.try_recv() {
-                        Ok((device_number, change_index)) => {
-                            chunk_trackers[device_number].mark_chunk(change_index);
-                        },
-                        Err(TryRecvError::Empty) => {
-                            break 'drain_change_queue;
-                        },
-                        Err(_) => {
-                            panic!("Unexpected error reading change queue");
-                        },
-                    }
+                                Response::Query(Status::Running(run_status))
+                            },
+                        };
+                    ticket.respond(response);
                 }
             };
 
-            let display_detail: usize = 
-                if total_chunk_count <= self.config.max_diagram_size {
-                    0
-                } else {
-                    // Mathematically, the first ceil isn't necessary, but I'm
-                    // being (likely unnecessarily) paranoid about precision.
-                    (total_chunk_count as f64 / self.config.max_diagram_size as f64).ceil().log2().ceil() as u64
-                } as usize;
+        let mut last_progress_update = Instant::now();
+        let mut total_writes = 0;
 
-            let mut last_progress_update = Instant::now();
-            let mut total_writes = 0;
+        // Only stop when we've done two consecutive syncs without any events in between them.
+        let mut synced = false;
+        'sync_loop: while !synced {
+            // Everything in libc is unsafe. :P
+            unsafe {libc::sync()};
 
-            // Only stop when we've done two consecutive syncs without any events in between them.
-            let mut synced = false;
-            while !synced {
-                // Everything in libc is unsafe. :P
-                unsafe {libc::sync()};
+            // Make sure all the sync write events are captured.
+            let barrier = Arc::new(Barrier::new(2));
+            sync_barrier_produce.send(Arc::clone(&barrier)).expect("Change logger thread died before it was relieved");
+            barrier.wait();
 
-                // Make sure all the sync write events are captured.
-                let barrier = Arc::new(Barrier::new(2));
-                sync_barrier_produce.send(Arc::clone(&barrier)).expect("Change logger thread died before it was relieved");
-                barrier.wait();
+            update_chunk_trackers(&mut chunk_trackers);
+            synced = true;
 
-                update_chunk_trackers(&mut chunk_trackers);
-                synced = true;
-
-                let mut still_copying = true;
-                while still_copying {
-                    still_copying = false;
-                    for device_number in 0..number_of_devices {
-                        let mut find_index: Option<usize> = None;
-                        'device_copy_loop: loop {
+            let mut still_copying = true;
+            while still_copying {
+                still_copying = false;
+                for device_number in 0..number_of_devices {
+                    let mut find_index: Option<usize> = None;
+                    'device_copy_loop: loop {
+                        if paused {
+                            std::thread::sleep(Duration::from_millis(10));
+                            update_chunk_trackers(&mut chunk_trackers);
+                        } else {
                             // Find next dirty index
                             match find_index {
                                 None => {
@@ -165,11 +212,15 @@ impl<'c, 's, 'd> Copier<'c, 's, 'd> {
                                     // dirty in case it's written to whilst we read it.
                                     chunk_trackers[device_number].clear_chunk(index);
 
-                                    let chunk = self.sources[device_number].get_chunk(index as u64 * self.config.chunk_size as u64, self.config.chunk_size);
+                                    let chunk = sources[device_number].get_chunk(index as u64 * manifest.jobs[device_number].chunk_size as u64, manifest.jobs[device_number].chunk_size);
                                     let mut message = Some( (device_number, chunk) );
 
                                     'write_try_loop: loop {
                                         update_chunk_trackers(&mut chunk_trackers);
+                                        handle_management_tickets(&mut cancelled, &mut paused, &chunk_trackers);
+                                        if cancelled {
+                                            break 'sync_loop;
+                                        }
 
                                         match write_queue_produce.try_send( message.take().unwrap() ) {
                                             Ok(()) => {
@@ -190,34 +241,42 @@ impl<'c, 's, 'd> Copier<'c, 's, 'd> {
                                     total_writes += 1;
                                 },
                             }
+                        } // <- if paused {...} else >>>{...}<<<
 
-                            if last_progress_update.elapsed() >= self.config.progress_update_period {
-                                if self.config.exclusive_progress_updates {
-                                    std::io::stdout().write_all(b"\x1b[2J").unwrap();
-                                }
-                                for i in 0..number_of_devices {
-                                    println!("Copying '{}' to '{}'\nProcessing as {} chunks of size {}\n{}", source_paths[i].display(), destination_paths[i].display(), chunk_trackers[i].get_chunk_count(), self.config.chunk_size, chunk_trackers[i].summary_report(self.config, display_detail));
-                                }
-                                println!(
-                                    "Done {}{}   Dirty {}{}   Unprocessed {}{}   UnprocessedDirty {}{}",
-                                    self.config.diagram_cells[0], self.config.diagram_cells_reset,
-                                    self.config.diagram_cells[1], self.config.diagram_cells_reset,
-                                    self.config.diagram_cells[2], self.config.diagram_cells_reset,
-                                    self.config.diagram_cells[3], self.config.diagram_cells_reset
-                                );
-                                println!("Chunk writes: {}", total_writes);
-                                last_progress_update = Instant::now();
+                        if last_progress_update.elapsed() >= config.progress_update_period {
+                            if config.exclusive_progress_updates {
+                                std::io::stdout().write_all(b"\x1b[2J").unwrap();
                             }
+                            for i in 0..number_of_devices {
+                                println!("Copying '{}' to '{}'\nProcessing as {} chunks of size {}\n{}", source_paths[i].display(), destination_paths[i].display(), chunk_trackers[i].get_chunk_count(), manifest.jobs[i].chunk_size, chunk_trackers[i].summary_report(&config, display_detail));
+                            }
+                            println!(
+                                "Done {}{}   Dirty {}{}   Unprocessed {}{}   UnprocessedDirty {}{}",
+                                config.diagram_cells[0], config.diagram_cells_reset,
+                                config.diagram_cells[1], config.diagram_cells_reset,
+                                config.diagram_cells[2], config.diagram_cells_reset,
+                                config.diagram_cells[3], config.diagram_cells_reset
+                            );
+                            println!("Chunk writes: {}", total_writes);
+                            last_progress_update = Instant::now();
                         }
-                    }
-                }
-            }
+                        handle_management_tickets(&mut cancelled, &mut paused, &chunk_trackers);
+                        if cancelled {
+                            break 'sync_loop;
+                        }
+                    } // <- 'device_copy_loop loop
+                } // <- for device_number in 0..number_of_devices
+            } // <- while still_copying
+        } // <- while !synced
+        if !cancelled {
             println!("Copying complete!");
             println!("Chunk writes: {} (efficiency is {})", total_writes, total_chunk_count as f64 / total_writes as f64);
-        }).unwrap();
+        } else {
+            println!("Copying aborted!");
+        }
+    }).unwrap();
 
-        println!("All threads finished");
+    println!("All copier threads finished");
 
-        Ok(())
-    }
+    Ok(())
 }
