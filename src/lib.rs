@@ -16,3 +16,5 @@ pub mod copier;
 mod quick_io;
 pub mod control;
 pub mod server;
+pub mod cli;
+pub mod lock;

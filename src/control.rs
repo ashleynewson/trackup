@@ -1,6 +1,7 @@
 use std::sync::mpsc::{Sender,Receiver,TryRecvError};
 use serde::{Serialize,Deserialize};
 use crate::job::Job;
+use crate::lock::{CommandLock,FileLock};
 
 #[derive(Clone,Serialize,Deserialize)]
 pub enum Request {
@@ -23,6 +24,11 @@ pub enum Response {
 #[derive(Clone,Serialize,Deserialize)]
 pub struct Manifest {
     pub jobs: Vec<Job>,
+    pub do_sync: bool,
+    pub command_locks: Vec<CommandLock>,
+    pub file_locks: Vec<FileLock>,
+    pub lock_time_limit: std::time::Duration,
+    pub lock_cooldown: std::time::Duration,
 }
 
 #[derive(Clone,Serialize,Deserialize)]

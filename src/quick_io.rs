@@ -1,6 +1,8 @@
+use std::convert::TryInto;
 use std::path::Path;
 use std::fs::OpenOptions;
 use std::os::raw::c_int;
+use std::os::unix::io::AsRawFd;
 use std::io::{Read,Write};
 
 
@@ -83,5 +85,21 @@ pub fn fd_poll_read(fd: c_int, timeout_ms: c_int) -> bool {
         _ => {
             panic!("Unexpected poll return status");
         }
+    }
+}
+pub fn poll_read(file: &dyn AsRawFd, timeout: std::time::Duration) -> bool {
+    fd_poll_read(file.as_raw_fd(), timeout.as_millis().try_into().unwrap())
+}
+
+pub fn assert_read(read: &mut dyn Read, expected: &[u8]) -> Result<(),()> {
+    let mut actual: Vec<u8> = vec![0; expected.len()];
+    if let Err(e) = read.read_exact(&mut actual) {
+        eprintln!("Error trying to read an expected value: {:?}", e);
+        return Err(());
+    }
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(())
     }
 }

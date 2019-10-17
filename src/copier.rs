@@ -11,6 +11,7 @@ use crate::device::{Device,DeviceFile};
 use crate::backup_file::BackupFile;
 use crate::chunk_tracker::{ChunkTracker,calculate_display_detail};
 use crate::control::{Request,Response,Status,RunStatus,JobProgress,ManagementInterface,Manifest};
+use crate::lock::AutoLocker;
 
 
 pub fn run(config: &Config, manifest: &Manifest, management_interface: &ManagementInterface) -> Result<(),()> {
@@ -67,8 +68,6 @@ pub fn run(config: &Config, manifest: &Manifest, management_interface: &Manageme
     crossbeam::scope(|thread_scope| {
         {
             let devices_ref = &devices;
-            let config = config; // copy the ref
-
             thread_scope.builder()
                 .name("change-logger".to_string())
                 .spawn(move |_| {
@@ -85,6 +84,7 @@ pub fn run(config: &Config, manifest: &Manifest, management_interface: &Manageme
                 })
                 .unwrap();
         }
+        let auto_locker = AutoLocker::new(config, manifest);
 
         // Constrain the lifetime of our producers/consumers so that
         // the child threads can witness a disconnect.
@@ -164,20 +164,25 @@ pub fn run(config: &Config, manifest: &Manifest, management_interface: &Manageme
 
         let mut last_progress_update = Instant::now();
         let mut total_writes = 0;
+        let mut first_go = true;
 
-        // Only stop when we've done two consecutive syncs without any events in between them.
-        let mut synced = false;
-        'sync_loop: while !synced {
-            // Everything in libc is unsafe. :P
-            unsafe {libc::sync()};
+        // Only stop when we've done an (optional) sync whilst locked without any events occuring after it.
+        let mut consistent = false;
+        'consistency_loop: while !consistent {
+            let locked = !first_go && auto_locker.check() == crate::lock::AutoLockerStatus::Locked;
+            let should_sync = first_go || (locked && manifest.do_sync);
+            if should_sync {
+                // Everything in libc is unsafe. :P
+                unsafe {libc::sync()};
 
-            // Make sure all the sync write events are captured.
-            let barrier = Arc::new(Barrier::new(2));
-            sync_barrier_produce.send(Arc::clone(&barrier)).expect("Change logger thread died before it was relieved");
-            barrier.wait();
+                // Make sure all the sync write events are captured.
+                let barrier = Arc::new(Barrier::new(2));
+                sync_barrier_produce.send(Arc::clone(&barrier)).expect("Change logger thread died before it was relieved");
+                barrier.wait();
 
-            update_chunk_trackers(&mut chunk_trackers);
-            synced = true;
+                update_chunk_trackers(&mut chunk_trackers);
+            }
+            consistent = locked;
 
             let mut still_copying = true;
             while still_copying {
@@ -206,7 +211,7 @@ pub fn run(config: &Config, manifest: &Manifest, management_interface: &Manageme
                                 },
                                 Some(index) => {
                                     still_copying = true;
-                                    synced = false;
+                                    consistent = false;
 
                                     // Clear here, so it has a chance to get re-marked as
                                     // dirty in case it's written to whilst we read it.
@@ -219,7 +224,7 @@ pub fn run(config: &Config, manifest: &Manifest, management_interface: &Manageme
                                         update_chunk_trackers(&mut chunk_trackers);
                                         handle_management_tickets(&mut cancelled, &mut paused, &chunk_trackers);
                                         if cancelled {
-                                            break 'sync_loop;
+                                            break 'consistency_loop;
                                         }
 
                                         match write_queue_produce.try_send( message.take().unwrap() ) {
@@ -262,12 +267,13 @@ pub fn run(config: &Config, manifest: &Manifest, management_interface: &Manageme
                         }
                         handle_management_tickets(&mut cancelled, &mut paused, &chunk_trackers);
                         if cancelled {
-                            break 'sync_loop;
+                            break 'consistency_loop;
                         }
                     } // <- 'device_copy_loop loop
                 } // <- for device_number in 0..number_of_devices
             } // <- while still_copying
-        } // <- while !synced
+            first_go = false;
+        } // <- while !consistent
         if !cancelled {
             println!("Copying complete!");
             println!("Chunk writes: {} (efficiency is {})", total_writes, total_chunk_count as f64 / total_writes as f64);
