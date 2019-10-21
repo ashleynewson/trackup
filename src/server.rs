@@ -4,8 +4,7 @@ use std::os::unix::net::{UnixListener};
 use std::io::{BufReader,BufWriter};
 use std::path::Path;
 
-use crate::control::{Request,Response,Manifest,ManagementInterface,ManagementTicket,Status,LastResult};
-use crate::config::Config;
+use crate::control::{Request,Response,Config,Manifest,ManagementInterface,ManagementTicket,Status,LastResult};
 
 
 pub fn start_server(socket_path: &Path) -> ManagementInterface {

@@ -19,8 +19,7 @@ use nix::fcntl::{FlockArg,FcntlArg};
 use nix::unistd::{Uid,Gid,Pid,ForkResult};
 use nix::sys::wait::WaitStatus;
 use serde::{Serialize,Deserialize};
-use crate::config::Config;
-use crate::control::Manifest;
+use crate::control::{Config,Manifest};
 use crate::quick_io::{assert_read, poll_read};
 
 

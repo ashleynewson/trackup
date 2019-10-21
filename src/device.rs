@@ -4,7 +4,7 @@ use std::io::{Read,Seek,SeekFrom};
 use std::ffi::CString;
 use libc::{c_uint,dev_t};
 use crate::chunk::Chunk;
-use crate::config::Config;
+use crate::control::Config;
 use crate::quick_io::{slurp_file_at_path,slurp_and_parse_file_at_path};
 
 pub struct Device {

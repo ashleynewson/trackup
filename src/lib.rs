@@ -6,7 +6,6 @@ extern crate serde_json;
 mod alias_tree;
 mod chunk;
 pub mod job;
-pub mod config;
 mod device;
 mod backup_file;
 mod chunk_tracker;

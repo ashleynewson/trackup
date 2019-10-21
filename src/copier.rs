@@ -6,11 +6,10 @@ use std::time::{Duration,Instant};
 use std::io::Write;
 use std::path::PathBuf;
 
-use crate::config::Config;
 use crate::device::{Device,DeviceFile};
 use crate::backup_file::BackupFile;
 use crate::chunk_tracker::{ChunkTracker,calculate_display_detail};
-use crate::control::{Request,Response,Status,RunStatus,JobProgress,ManagementInterface,Manifest};
+use crate::control::{Request,Response,Status,RunStatus,JobProgress,ManagementInterface,Config,Manifest};
 use crate::lock::AutoLocker;
 
 

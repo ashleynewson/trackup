@@ -1,5 +1,5 @@
 use crate::alias_tree::AliasTree;
-use crate::config::Config;
+use crate::control::Config;
 
 pub struct ChunkTracker {
     chunk_count: usize,

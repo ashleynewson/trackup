@@ -3,10 +3,8 @@ extern crate clap;
 
 use std::path::{Path,PathBuf};
 use std::time::Duration;
-use trackup::config::Config;
 use trackup::job::Job;
-use trackup::control::ManagementInterface;
-use trackup::control::Manifest;
+use trackup::control::{Config,ManagementInterface,Manifest};
 
 fn main() {
     let app = trackup::cli::get_app();
@@ -38,9 +36,9 @@ fn main() {
 
     let diagram_cells =
         if color_mode {
-            &trackup::config::COLOR_DIAGRAM_CELLS
+            &trackup::control::COLOR_DIAGRAM_CELLS
         } else {
-            &trackup::config::PLAIN_DIAGRAM_CELLS
+            &trackup::control::PLAIN_DIAGRAM_CELLS
         }
         .iter()
         .map(|x| {String::from(*x)})

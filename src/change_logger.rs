@@ -4,10 +4,9 @@ use std::sync::mpsc::{Receiver,Sender};
 use std::sync::{Arc,Barrier};
 use std::ffi::CString;
 use libc::{c_int,c_void,ssize_t,size_t};
-use crate::config::Config;
 use crate::device::Device;
 use crate::quick_io::{append_to_file_at_path,slurp_file_at_path,fd_poll_read};
-use crate::control::Manifest;
+use crate::control::{Config,Manifest};
 
 trait WarnIfErr {
     fn warn_if_err(&self);
