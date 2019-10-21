@@ -3,8 +3,7 @@ extern crate clap;
 
 use std::path::{Path,PathBuf};
 use std::time::Duration;
-use trackup::job::Job;
-use trackup::control::{Config,ManagementInterface,Manifest};
+use trackup::control::{Config,Job,ManagementInterface,Manifest};
 
 fn main() {
     let app = trackup::cli::get_app();

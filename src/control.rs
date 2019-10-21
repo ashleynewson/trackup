@@ -2,7 +2,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::sync::mpsc::{Sender,Receiver,TryRecvError};
 use serde::{Serialize,Deserialize};
-use crate::job::Job;
 use crate::lock::{CommandLock,FileLock};
 
 #[derive(Clone,Serialize,Deserialize)]
@@ -37,6 +36,14 @@ pub struct Config {
 
 pub const PLAIN_DIAGRAM_CELLS: [&str; 4] = ["#", "*", ".", "o"];
 pub const COLOR_DIAGRAM_CELLS: [&str; 4] = ["\x1b[42m#", "\x1b[41m*", "\x1b[100m.", "\x1b[44mo"];
+
+#[derive(Clone,Serialize,Deserialize)]
+pub struct Job {
+    pub source: PathBuf,
+    pub destination: PathBuf,
+    pub chunk_size: usize,
+    pub reuse_output: bool,
+}
 
 #[derive(Clone,Serialize,Deserialize)]
 pub struct Manifest {
