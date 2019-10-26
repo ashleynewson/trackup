@@ -10,6 +10,11 @@ use crate::control::{Request,Response,Config,Manifest,ManagementInterface,Manage
 pub fn start_server(socket_path: &Path) -> ManagementInterface {
     let (request_sender, request_receiver) = sync_channel(0);
 
+    if socket_path.exists() {
+        // Could probably check to make sure this is actually a unix domain
+        // socket before deleting it.
+        std::fs::remove_file(socket_path).expect("Unable to delete the existing file at the management socket path");
+    }
     let listener = UnixListener::bind(socket_path).unwrap();
     eprintln!("Management server listening on socket: {}", socket_path.display());
     thread::spawn(move || {
