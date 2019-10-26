@@ -369,7 +369,7 @@ impl AutoLocker {
         if locks.len() == 0 {
             // Special case: always act locked if we have no locks
             *shared.status.lock().unwrap() = AutoLockerStatus::Locked;
-            while *shared.joining.lock().unwrap() {
+            while !*shared.joining.lock().unwrap() {
                 std::thread::park();
             }
             return;
