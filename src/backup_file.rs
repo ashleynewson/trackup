@@ -1,13 +1,11 @@
 use std::path::{Path,PathBuf};
 use std::fs::File;
 use std::io::{Write,Seek,SeekFrom};
-use std::os::unix::io::IntoRawFd;
 use crate::chunk::Chunk;
 
 pub struct BackupFile {
     path: PathBuf,
     file: File,
-    // fd: RawFd,
 }
 
 impl BackupFile {
@@ -19,12 +17,7 @@ impl BackupFile {
             },
         };
 
-        if let Err(e) = nix::fcntl::fallocate(
-            file.try_clone().unwrap().into_raw_fd(),
-            nix::fcntl::FallocateFlags::FALLOC_FL_ZERO_RANGE,
-            0,
-            size as i64,
-        ) {
+        if let Err(e) = file.set_len(size) {
             return Err(format!("Could not pre-allocate backup file: {:?}", e));
         }
 

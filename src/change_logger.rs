@@ -3,7 +3,7 @@ use std::collections::{HashMap,BTreeSet};
 use std::sync::mpsc::{Receiver,Sender};
 use std::sync::{Arc,Barrier};
 use std::ffi::CString;
-use libc::{c_int,c_void,ssize_t,size_t};
+use libc::{c_char,c_int,c_void,ssize_t,size_t};
 use crate::device::Device;
 use crate::quick_io::{append_to_file_at_path,slurp_file_at_path,fd_poll_read};
 use crate::control::{Config,Manifest};
@@ -199,7 +199,7 @@ pub fn run(config: &Config, manifest: &Manifest, devices: &Vec<Device>, log_chan
     // to get blk data.
     {
         let trace_pipe_file = unsafe{
-            libc::fdopen(trace_pipe_fd, b"rb\0".as_ptr() as *const i8)
+            libc::fdopen(trace_pipe_fd, b"rb\0".as_ptr() as *const c_char)
         };
         // I'm assuming the stream can't ever half-write a data structure.
         unsafe{
