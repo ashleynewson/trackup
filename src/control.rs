@@ -51,13 +51,18 @@ pub struct Job {
 }
 
 #[derive(Clone,Serialize,Deserialize)]
+pub struct Locking {
+    pub command_locks: Vec<CommandLock>,
+    pub file_locks: Vec<FileLock>,
+    pub time_limit: Duration,
+    pub cooldown: Duration,
+}
+
+#[derive(Clone,Serialize,Deserialize)]
 pub struct Manifest {
     pub jobs: Vec<Job>,
     pub do_sync: bool,
-    pub command_locks: Vec<CommandLock>,
-    pub file_locks: Vec<FileLock>,
-    pub lock_time_limit: Duration,
-    pub lock_cooldown: Duration,
+    pub locking: Option<Locking>,
 }
 
 #[derive(Clone,Serialize,Deserialize)]

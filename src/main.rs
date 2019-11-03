@@ -65,10 +65,7 @@ fn main() {
     let manifest = Manifest {
         jobs,
         do_sync: true,
-        command_locks: Vec::new(),
-        file_locks: Vec::new(),
-        lock_time_limit: std::time::Duration::new(0, 0),
-        lock_cooldown: std::time::Duration::new(0, 0),
+        locking: None,
     };
 
     nix::sys::mman::mlockall(nix::sys::mman::MlockAllFlags::all()).expect("Could not mlock pages in RAM. (Are you root?)");

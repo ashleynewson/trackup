@@ -356,79 +356,87 @@ impl AutoLocker {
         }
     }
 
-    fn run(_config: Config, manifest: Manifest, shared: Arc<AutoLockerShared>) {
-        let mut locks: Vec<&dyn Lock> = Vec::new();
-        for lock in &manifest.command_locks {
-            locks.push(lock);
-        }
-        for lock in &manifest.file_locks {
-            locks.push(lock);
-        }
-        let locks = locks; // drop mut
-
-        if locks.len() == 0 {
-            // Special case: always act locked if we have no locks
-            *shared.status.lock().unwrap() = AutoLockerStatus::Locked;
-            while !*shared.joining.lock().unwrap() {
-                std::thread::park();
-            }
-            return;
-        }
-
-        let interruptible_timeout = |duration| {
-            let start = Instant::now();
-            while
-                !*shared.joining.lock().unwrap()
-                && start.elapsed() < duration
-            {
-                if let Some(time_left) = duration.checked_sub(start.elapsed()) {
-                    std::thread::park_timeout(time_left);
-                } else {
-                    break;
-                }
-            }
-        };
-
+    fn noop_run(shared: Arc<AutoLockerShared>) {
+        // Always act locked if we have no locks
+        *shared.status.lock().unwrap() = AutoLockerStatus::Locked;
         while !*shared.joining.lock().unwrap() {
-            let status = *shared.status.lock().unwrap();
-            match status {
-                AutoLockerStatus::Unlocked => {
-                    std::thread::park();
-                },
-                AutoLockerStatus::Locking => {
-                    eprintln!("Applying consistency locks...");
-                    // Todo: make threaded?
-                    (|| {
-                        let mut commitments: Vec<Commitment> = Vec::new();
-                        for lock in &locks {
-                            match lock.lock() {
-                                Ok(commitment) => {
-                                    commitments.push(commitment);
-                                },
-                                Err(_) => {
-                                    eprintln!("Cannot lock right now. Backing off.");
-                                    return;
+            std::thread::park();
+        }
+    }
+
+    fn run(_config: Config, manifest: Manifest, shared: Arc<AutoLockerShared>) {
+        if let Some(locking) = &manifest.locking {
+            let mut locks: Vec<&dyn Lock> = Vec::new();
+
+            for lock in &locking.command_locks {
+                locks.push(lock);
+            }
+            for lock in &locking.file_locks {
+                locks.push(lock);
+            }
+            let locks = locks; // drop mut
+
+            if locks.len() == 0 {
+                return Self::noop_run(shared);
+            }
+
+            let interruptible_timeout = |duration| {
+                let start = Instant::now();
+                while
+                    !*shared.joining.lock().unwrap()
+                    && start.elapsed() < duration
+                {
+                    if let Some(time_left) = duration.checked_sub(start.elapsed()) {
+                        std::thread::park_timeout(time_left);
+                    } else {
+                        break;
+                    }
+                }
+            };
+
+            while !*shared.joining.lock().unwrap() {
+                let status = *shared.status.lock().unwrap();
+                match status {
+                    AutoLockerStatus::Unlocked => {
+                        std::thread::park();
+                    },
+                    AutoLockerStatus::Locking => {
+                        eprintln!("Applying consistency locks...");
+                        // Todo: make threaded?
+                        (|| {
+                            let mut commitments: Vec<Commitment> = Vec::new();
+                            for lock in &locks {
+                                match lock.lock() {
+                                    Ok(commitment) => {
+                                        commitments.push(commitment);
+                                    },
+                                    Err(_) => {
+                                        eprintln!("Cannot lock right now. Backing off.");
+                                        return;
+                                    }
                                 }
                             }
-                        }
-                        *shared.status.lock().unwrap() = AutoLockerStatus::Locked;
-                        eprintln!("Locks acquired.");
-                        interruptible_timeout(manifest.lock_time_limit);
-                        *shared.status.lock().unwrap() = AutoLockerStatus::Unlocking;
-                        eprintln!("Unlocking...");
-                    })();
-                    *shared.status.lock().unwrap() = AutoLockerStatus::Cooldown;
-                    eprintln!("Consistency lock cooldown started...");
-                    interruptible_timeout(manifest.lock_cooldown);
-                    *shared.status.lock().unwrap() = AutoLockerStatus::Unlocked;
-                    eprintln!("Consistency lock cooldown expired.");
-                },
-                other => {
-                    // Unreachable
-                    panic!("auto locker is in an unexpected state: {:?}", other);
-                },
+                            *shared.status.lock().unwrap() = AutoLockerStatus::Locked;
+                            eprintln!("Locks acquired.");
+                            interruptible_timeout(locking.time_limit);
+                            *shared.status.lock().unwrap() = AutoLockerStatus::Unlocking;
+                            eprintln!("Unlocking...");
+                        })();
+                        *shared.status.lock().unwrap() = AutoLockerStatus::Cooldown;
+                        eprintln!("Consistency lock cooldown started...");
+                        interruptible_timeout(locking.cooldown);
+                        *shared.status.lock().unwrap() = AutoLockerStatus::Unlocked;
+                        eprintln!("Consistency lock cooldown expired.");
+                    },
+                    other => {
+                        // Unreachable
+                        panic!("auto locker is in an unexpected state: {:?}", other);
+                    },
+                }
             }
-        }
+        } else {
+            return Self::noop_run(shared);
+        };
     }
 }
 impl Drop for AutoLocker {
