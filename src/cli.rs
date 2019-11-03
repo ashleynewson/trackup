@@ -69,6 +69,7 @@ pub fn get_app() -> App<'static, 'static> {
                 .help("Maximum number of characters to use for progress diagrams")
                 .takes_value(true)
                 .default_value("1024")
+                .requires("progress-period")
         )
         .arg(
             Arg::with_name("exclusive-progress-updates")
@@ -76,6 +77,7 @@ pub fn get_app() -> App<'static, 'static> {
                 .long("exclusive-progress-updates")
                 .help("Clear screen before each progress update")
                 .takes_value(false)
+                .requires("progress-period")
         )
         .arg(
             Arg::with_name("reuse")
@@ -90,6 +92,7 @@ pub fn get_app() -> App<'static, 'static> {
                 .long("color")
                 .help("Display diagrams in color")
                 .takes_value(false)
+                .requires("progress-period")
         )
         .arg(
             Arg::with_name("management-socket")

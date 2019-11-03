@@ -23,15 +23,20 @@ pub enum Response {
 }
 
 #[derive(Clone,Serialize,Deserialize)]
+pub struct ProgressLogging {
+    pub update_period: Duration,
+    pub exclusive: bool,
+    pub max_diagram_size: usize,
+    pub diagram_cells: Vec<String>,
+    pub diagram_cells_reset: String,
+}
+
+#[derive(Clone,Serialize,Deserialize)]
 pub struct Config {
     pub tracing_path: PathBuf,
     pub sys_path: PathBuf,
     pub trace_buffer_size: usize,
-    pub progress_update_period: Duration,
-    pub exclusive_progress_updates: bool,
-    pub max_diagram_size: usize,
-    pub diagram_cells: Vec<String>,
-    pub diagram_cells_reset: String,
+    pub progress_logging: Option<ProgressLogging>,
 }
 
 pub const PLAIN_DIAGRAM_CELLS: [&str; 4] = ["#", "*", ".", "o"];

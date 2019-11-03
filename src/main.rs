@@ -3,7 +3,7 @@ extern crate clap;
 
 use std::path::{Path,PathBuf};
 use std::time::Duration;
-use trackup::control::{Config,Job,ManagementInterface,Manifest};
+use trackup::control::{Config,ProgressLogging,Job,ManagementInterface,Manifest};
 
 fn main() {
     let app = trackup::cli::get_app();
@@ -27,31 +27,40 @@ fn main() {
     let tracing_path = PathBuf::from(matches.value_of("tracing-path").unwrap());
     let sys_path = PathBuf::from(matches.value_of("sys-path").unwrap());
     let trace_buffer_size: usize = matches.value_of("trace-buffer-size").unwrap().parse().unwrap();
-    let progress_update_period = Duration::from_secs(matches.value_of("progress-period").unwrap().parse().unwrap());
-    let exclusive_progress_updates = matches.is_present("exclusive-progress-updates");
-    let max_diagram_size: usize = matches.value_of("max-diagram-size").unwrap().parse().unwrap();
-    let color_mode = matches.is_present("color");
-    let daemon_mode = matches.is_present("daemon");
 
-    let diagram_cells =
-        if color_mode {
-            &trackup::control::COLOR_DIAGRAM_CELLS
-        } else {
-            &trackup::control::PLAIN_DIAGRAM_CELLS
-        }
-        .iter()
-        .map(|x| {String::from(*x)})
-        .collect();
+    let progress_logging = if matches.is_present("progress-period") {
+        let update_period = Duration::from_secs(matches.value_of("progress-period").unwrap().parse().unwrap());
+        let exclusive = matches.is_present("exclusive-progress-updates");
+        let max_diagram_size: usize = matches.value_of("max-diagram-size").unwrap().parse().unwrap();
+        let color_mode = matches.is_present("color");
+        let diagram_cells =
+            if color_mode {
+                &trackup::control::COLOR_DIAGRAM_CELLS
+            } else {
+                &trackup::control::PLAIN_DIAGRAM_CELLS
+            }
+            .iter()
+            .map(|x| {String::from(*x)})
+            .collect();
+
+        Some(ProgressLogging {
+            update_period,
+            exclusive,
+            max_diagram_size,
+            diagram_cells,
+            diagram_cells_reset: String::from(if color_mode {"\x1b[m"} else {""}),
+        })
+    } else {
+        None
+    };
+
+    let daemon_mode = matches.is_present("daemon");
 
     let config = Config {
         tracing_path,
         sys_path,
         trace_buffer_size,
-        progress_update_period,
-        exclusive_progress_updates,
-        max_diagram_size,
-        diagram_cells,
-        diagram_cells_reset: String::from(if color_mode {"\x1b[m"} else {""}),
+        progress_logging,
     };
     let manifest = Manifest {
         jobs,

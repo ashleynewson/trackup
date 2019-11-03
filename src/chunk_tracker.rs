@@ -1,5 +1,5 @@
 use crate::alias_tree::AliasTree;
-use crate::control::Config;
+use crate::control::{ProgressLogging};
 
 pub struct ChunkTracker {
     chunk_count: usize,
@@ -61,7 +61,7 @@ impl ChunkTracker {
         self.chunks.find_next(|x|{*x!=0}, start)
     }
 
-    pub fn summary_report(&self, config: &Config, height: usize) -> String {
+    pub fn summary_report(&self, progress_logging: &ProgressLogging, height: usize) -> String {
         // BUG: If the chunk count isn't a multiple of 1<<height, the last chunk may not be representative.
         let factor: usize = 1 << height;
         let checks = (self.chunk_count-1)/factor+1;
@@ -71,13 +71,13 @@ impl ChunkTracker {
 
         for index in 0..checks {
             let flags = *self.chunks.get_aliased(index*factor, height);
-            diagram.push_str(&config.diagram_cells[flags as usize]);
+            diagram.push_str(&progress_logging.diagram_cells[flags as usize]);
             if flags == 0 {
                 done += 1;
             }
         }
 
-        format!("\nChunk map ({} chunks per cell):\n{}{}\n\nProgess: {}%\n", factor, diagram, config.diagram_cells_reset, done * 100 / checks)
+        format!("\nChunk map ({} chunks per cell):\n{}{}\n\nProgess: {}%\n", factor, diagram, progress_logging.diagram_cells_reset, done * 100 / checks)
     }
 
     pub fn snapshot_level(&self, height: usize) -> Vec<u8> {

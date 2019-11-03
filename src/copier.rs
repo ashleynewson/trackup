@@ -92,7 +92,12 @@ pub fn run(config: &Config, manifest: &Manifest, management_interface: &Manageme
         // We don't need to constrain change_queue as it doesn't
         // strictly control any looping behaviour.
 
-        let display_detail: usize = calculate_display_detail(total_chunk_count, config.max_diagram_size);
+        let display_detail: Option<usize> = match &config.progress_logging {
+            Some(progress_logging) => {
+                Some(calculate_display_detail(total_chunk_count, progress_logging.max_diagram_size))
+            },
+            None => None
+        };
 
         let update_chunk_trackers = |chunk_trackers: &mut Vec<ChunkTracker>| {
             'drain_change_queue: loop {
@@ -247,22 +252,24 @@ pub fn run(config: &Config, manifest: &Manifest, management_interface: &Manageme
                             }
                         } // <- if paused {...} else >>>{...}<<<
 
-                        if last_progress_update.elapsed() >= config.progress_update_period {
-                            if config.exclusive_progress_updates {
-                                std::io::stdout().write_all(b"\x1b[2J").unwrap();
+                        if let Some(progress_logging) = &config.progress_logging {
+                            if last_progress_update.elapsed() >= progress_logging.update_period {
+                                if progress_logging.exclusive {
+                                    std::io::stdout().write_all(b"\x1b[2J").unwrap();
+                                }
+                                for i in 0..number_of_devices {
+                                    println!("Copying '{}' to '{}'\nProcessing as {} chunks of size {}\n{}", source_paths[i].display(), destination_paths[i].display(), chunk_trackers[i].get_chunk_count(), manifest.jobs[i].chunk_size, chunk_trackers[i].summary_report(&progress_logging, display_detail.unwrap()));
+                                }
+                                println!(
+                                    "Done {}{}   Dirty {}{}   Unprocessed {}{}   UnprocessedDirty {}{}",
+                                    progress_logging.diagram_cells[0], progress_logging.diagram_cells_reset,
+                                    progress_logging.diagram_cells[1], progress_logging.diagram_cells_reset,
+                                    progress_logging.diagram_cells[2], progress_logging.diagram_cells_reset,
+                                    progress_logging.diagram_cells[3], progress_logging.diagram_cells_reset
+                                );
+                                println!("Chunk writes: {}", total_writes);
+                                last_progress_update = Instant::now();
                             }
-                            for i in 0..number_of_devices {
-                                println!("Copying '{}' to '{}'\nProcessing as {} chunks of size {}\n{}", source_paths[i].display(), destination_paths[i].display(), chunk_trackers[i].get_chunk_count(), manifest.jobs[i].chunk_size, chunk_trackers[i].summary_report(&config, display_detail));
-                            }
-                            println!(
-                                "Done {}{}   Dirty {}{}   Unprocessed {}{}   UnprocessedDirty {}{}",
-                                config.diagram_cells[0], config.diagram_cells_reset,
-                                config.diagram_cells[1], config.diagram_cells_reset,
-                                config.diagram_cells[2], config.diagram_cells_reset,
-                                config.diagram_cells[3], config.diagram_cells_reset
-                            );
-                            println!("Chunk writes: {}", total_writes);
-                            last_progress_update = Instant::now();
                         }
                         handle_management_tickets(&mut cancelled, &mut paused, &chunk_trackers);
                         if cancelled {
