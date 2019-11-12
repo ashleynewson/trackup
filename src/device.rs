@@ -155,7 +155,7 @@ impl DeviceFile {
         // let fd = file.try_clone().unwrap().into_raw_fd();
 
         let size = file.seek(SeekFrom::End(0)).expect("Could not determine device size");
-        file.seek(SeekFrom::Start(0)).expect("Could not seek back to beginning of device file");;
+        file.seek(SeekFrom::Start(0)).expect("Could not seek back to beginning of device file");
 
         Ok(Self{
             path: path.to_path_buf(),
@@ -177,7 +177,7 @@ impl DeviceFile {
             };
         let mut data: Vec<u8> = Vec::with_capacity(capped_size);
         unsafe{data.set_len(capped_size)};
-        self.file.seek(SeekFrom::Start(offset)).expect("Could not seek device file");;
+        self.file.seek(SeekFrom::Start(offset)).expect("Could not seek device file");
         self.file.read_exact(&mut data).expect("Error reading from device file");
         Chunk {
             offset,
