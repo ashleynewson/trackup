@@ -3,70 +3,93 @@ extern crate clap;
 
 use std::path::{Path,PathBuf};
 use std::time::Duration;
-use trackup::control::{Config,ProgressLogging,Job,ManagementInterface,Manifest};
+use trackup::control::{Job,ManagementInterface,Manifest};
+use trackup::control::interface::Internalize;
 
 fn main() {
     let app = trackup::cli::get_app();
     let matches = app.get_matches();
 
-    let chunk_size: usize = matches.value_of("chunk-size").unwrap().parse().unwrap();
-    let reuse_output = matches.is_present("reuse");
+    let mut config = if let Some(config_path) = matches.value_of("config") {
+        match trackup::control::interface::read_config_file(Path::new(config_path)) {
+            Ok(config) => config,
+            Err(e) => {
+                panic!("Failed to load config file: {}", e);
+            },
+        }
+    } else {
+        trackup::control::interface::Config::default().internalize().unwrap()
+    };
 
-    let mut jobs = Vec::new();
-    if let Some(mut copy_it) = matches.values_of("copy") {
-        while let (Some(source), Some(destination)) = (copy_it.next(), copy_it.next()) {
-            jobs.push(Job {
-                source: PathBuf::from(source),
-                destination: PathBuf::from(destination),
-                chunk_size,
-                reuse_output,
-            });
+
+    if let Some(tracing_path) = matches.value_of("tracing-path") {
+        config.tracing_path = PathBuf::from(tracing_path);
+    }
+    if let Some(sys_path) = matches.value_of("sys-path") {
+        config.sys_path = PathBuf::from(sys_path);
+    }
+    if let Some(trace_buffer_size) = matches.value_of("trace-buffer-size") {
+        config.trace_buffer_size = trace_buffer_size.parse().expect("Could not parse trace-buffer-size as usize integer");
+    }
+    if matches.is_present("progress-period")
+        || matches.is_present("max-diagram-size")
+        || matches.is_present("exclusive-progress-updates")
+        || matches.is_present("color")
+    {
+        if config.progress_logging.is_none() {
+            config.progress_logging = Some(trackup::control::interface::ProgressLogging::default().internalize().unwrap());
+        }
+        let progress_logging = config.progress_logging.as_mut().unwrap();
+        if let Some(update_period) = matches.value_of("progress-period") {
+            progress_logging.update_period = Duration::from_secs(update_period.parse().unwrap());
+        }
+        if matches.is_present("exclusive-progress-updates") {
+            progress_logging.exclusive = true;
+        }
+        if let Some(max_diagram_size) = matches.value_of("max-diagram-size") {
+            progress_logging.max_diagram_size = max_diagram_size.parse().unwrap();
+        }
+        if matches.is_present("color") {
+            progress_logging.diagram_cells =
+                trackup::control::COLOR_DIAGRAM_CELLS
+                .iter()
+                .map(|x| {String::from(*x)})
+                .collect();
+            progress_logging.diagram_cells_reset = String::from("\x1b[m");
         }
     }
 
-    let tracing_path = PathBuf::from(matches.value_of("tracing-path").unwrap());
-    let sys_path = PathBuf::from(matches.value_of("sys-path").unwrap());
-    let trace_buffer_size: usize = matches.value_of("trace-buffer-size").unwrap().parse().unwrap();
-
-    let progress_logging = if matches.is_present("progress-period") {
-        let update_period = Duration::from_secs(matches.value_of("progress-period").unwrap().parse().unwrap());
-        let exclusive = matches.is_present("exclusive-progress-updates");
-        let max_diagram_size: usize = matches.value_of("max-diagram-size").unwrap().parse().unwrap();
-        let color_mode = matches.is_present("color");
-        let diagram_cells =
-            if color_mode {
-                &trackup::control::COLOR_DIAGRAM_CELLS
-            } else {
-                &trackup::control::PLAIN_DIAGRAM_CELLS
-            }
-            .iter()
-            .map(|x| {String::from(*x)})
-            .collect();
-
-        Some(ProgressLogging {
-            update_period,
-            exclusive,
-            max_diagram_size,
-            diagram_cells,
-            diagram_cells_reset: String::from(if color_mode {"\x1b[m"} else {""}),
-        })
+    let manifest = if let Some(manifest_path) = matches.value_of("manifest") {
+        match trackup::control::interface::read_manifest_file(Path::new(manifest_path)) {
+            Ok(manifest) => manifest,
+            Err(e) => {
+                panic!("Failed to load manifest file: {}", e);
+            },
+        }
     } else {
-        None
+        let chunk_size: usize = matches.value_of("chunk-size").unwrap().parse().unwrap();
+        let reuse_output = matches.is_present("reuse");
+
+        let mut jobs = Vec::new();
+        if let Some(mut copy_it) = matches.values_of("copy") {
+            while let (Some(source), Some(destination)) = (copy_it.next(), copy_it.next()) {
+                jobs.push(Job {
+                    source: PathBuf::from(source),
+                    destination: PathBuf::from(destination),
+                    chunk_size,
+                    reuse_output,
+                });
+            }
+        }
+
+        Manifest {
+            jobs,
+            do_sync: true,
+            locking: None,
+        }
     };
 
     let daemon_mode = matches.is_present("daemon");
-
-    let config = Config {
-        tracing_path,
-        sys_path,
-        trace_buffer_size,
-        progress_logging,
-    };
-    let manifest = Manifest {
-        jobs,
-        do_sync: true,
-        locking: None,
-    };
 
     nix::sys::mman::mlockall(nix::sys::mman::MlockAllFlags::all()).expect("Could not mlock pages in RAM. (Are you root?)");
 

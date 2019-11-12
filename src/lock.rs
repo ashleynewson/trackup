@@ -49,14 +49,14 @@ pub enum LockBehaviour {
     ExclusiveLock, // Require an exclusive lock on the file
 }
 
-/// A file which should be absent before backups can be committed.
+/// A file which should be locked/absent before backups can be committed.
 #[derive(Clone,Serialize,Deserialize)]
 pub struct FileLock {
-    path: PathBuf,
-    behaviour: LockBehaviour,
-    create_uid: Option<uid_t>,
-    create_gid: Option<gid_t>,
-    create_mode: Option<mode_t>,
+    pub path: PathBuf,
+    pub behaviour: LockBehaviour,
+    pub create_uid: Option<uid_t>,
+    pub create_gid: Option<gid_t>,
+    pub create_mode: Option<mode_t>,
 }
 
 
@@ -197,14 +197,14 @@ impl<'b> Drop for CommandCommitment<'b> {
 /// A command to run as a check before a backup is committed
 #[derive(Clone,Serialize,Deserialize)]
 pub struct CommandLock {
-    program: PathBuf,
-    args: Vec<OsString>,
-    uid: Option<uid_t>, // Run as UID
-    gid: Option<gid_t>, // Run as GID
-    preserve_envs: Option<HashSet<OsString>>, // None means don't clear. Some but empty means preserve nothing.
-    envs: HashMap<OsString,OsString>,
-    locking_timeout: Option<Duration>,
-    unlocking_timeout: Option<Duration>,
+    pub program: PathBuf,
+    pub args: Vec<OsString>,
+    pub uid: Option<uid_t>, // Run as UID
+    pub gid: Option<gid_t>, // Run as GID
+    pub preserve_envs: Option<HashSet<OsString>>, // None means don't clear. Some but empty means preserve nothing.
+    pub envs: HashMap<OsString,OsString>,
+    pub locking_timeout: Option<Duration>,
+    pub unlocking_timeout: Option<Duration>,
 }
 
 impl Lock for CommandLock {
@@ -418,13 +418,22 @@ impl AutoLocker {
                             }
                             *shared.status.lock().unwrap() = AutoLockerStatus::Locked;
                             eprintln!("Locks acquired.");
-                            interruptible_timeout(locking.time_limit);
+                            if let Some(time_limit) = locking.time_limit {
+                                interruptible_timeout(time_limit);
+                            } else {
+                                // Lock until the backup is done
+                                while !*shared.joining.lock().unwrap() {
+                                    std::thread::park();
+                                }
+                            }
                             *shared.status.lock().unwrap() = AutoLockerStatus::Unlocking;
                             eprintln!("Unlocking...");
                         })();
                         *shared.status.lock().unwrap() = AutoLockerStatus::Cooldown;
                         eprintln!("Consistency lock cooldown started...");
-                        interruptible_timeout(locking.cooldown);
+                        if let Some(cooldown) = locking.cooldown {
+                            interruptible_timeout(cooldown);
+                        }
                         *shared.status.lock().unwrap() = AutoLockerStatus::Unlocked;
                         eprintln!("Consistency lock cooldown expired.");
                     },
