@@ -18,7 +18,7 @@ impl BackupFile {
         };
 
         if let Err(e) = file.set_len(size) {
-            return Err(format!("Could not pre-allocate backup file: {:?}", e));
+            eprintln!("Could not pre-allocate backup file: {:?}", e);
         }
 
         Ok(Self{

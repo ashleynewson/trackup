@@ -4,6 +4,8 @@ use std::sync::mpsc::{Sender,Receiver,TryRecvError};
 use serde::{Serialize,Deserialize};
 use crate::lock::{CommandLock,FileLock};
 
+pub mod interface;
+
 #[derive(Clone,Serialize,Deserialize)]
 pub enum Request {
     Start(Manifest),
@@ -54,8 +56,8 @@ pub struct Job {
 pub struct Locking {
     pub command_locks: Vec<CommandLock>,
     pub file_locks: Vec<FileLock>,
-    pub time_limit: Duration,
-    pub cooldown: Duration,
+    pub time_limit: Option<Duration>,
+    pub cooldown: Option<Duration>,
 }
 
 #[derive(Clone,Serialize,Deserialize)]
