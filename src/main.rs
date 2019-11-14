@@ -21,7 +21,6 @@ fn main() {
         trackup::control::interface::Config::default().internalize().unwrap()
     };
 
-
     if let Some(tracing_path) = matches.value_of("tracing-path") {
         config.tracing_path = PathBuf::from(tracing_path);
     }

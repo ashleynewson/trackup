@@ -73,6 +73,7 @@ impl<I,O> Maybe<I,O> for Option<I> {
 }
 
 #[derive(Clone,Serialize,Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub tracing_path: PathBuf,
     pub sys_path: PathBuf,
@@ -112,6 +113,7 @@ pub enum ProgressStyle {
 }
 
 #[derive(Clone,Serialize,Deserialize)]
+#[serde(default)]
 pub struct ProgressLogging {
     pub style: ProgressStyle,
     /// Time between progress reports in seconds
@@ -160,6 +162,7 @@ impl Internalize<super::ProgressLogging> for ProgressLogging {
 }
 
 #[derive(Clone,Serialize,Deserialize)]
+#[serde(default)]
 struct Manifest {
     pub jobs: Vec<Job>,
     pub do_sync: bool,
@@ -207,6 +210,7 @@ impl Internalize<crate::lock::LockBehaviour> for LockBehaviour {
 }
 
 #[derive(Clone,Serialize,Deserialize)]
+#[serde(default)]
 struct FileLock {
     pub path: Required<PathBuf>,
     pub behaviour: Required<LockBehaviour>,
@@ -240,6 +244,7 @@ impl Internalize<crate::lock::FileLock> for FileLock {
 }
 
 #[derive(Clone,Serialize,Deserialize)]
+#[serde(default)]
 struct CommandLock {
     pub program: Required<PathBuf>,
     pub args: Vec<OsString>,
@@ -282,6 +287,7 @@ impl Internalize<crate::lock::CommandLock> for CommandLock {
 }
 
 #[derive(Clone,Serialize,Deserialize)]
+#[serde(default)]
 struct Locking {
     pub command_locks: Vec<CommandLock>,
     pub file_locks: Vec<FileLock>,
@@ -312,6 +318,7 @@ impl Internalize<super::Locking> for Locking {
 }
 
 #[derive(Clone,Serialize,Deserialize)]
+#[serde(default)]
 struct Job {
     pub source: Required<PathBuf>,
     pub destination: Required<PathBuf>,

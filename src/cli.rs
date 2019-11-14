@@ -39,7 +39,6 @@ pub fn get_app() -> App<'static, 'static> {
                 .value_name("SECONDS")
                 .help("Time in seconds between progress updates")
                 .takes_value(true)
-                .default_value("5")
         )
         .arg(
             Arg::with_name("max-diagram-size")
@@ -48,7 +47,6 @@ pub fn get_app() -> App<'static, 'static> {
                 .value_name("SECONDS")
                 .help("Maximum number of characters to use for progress diagrams")
                 .takes_value(true)
-                .default_value("1024")
         )
         .arg(
             Arg::with_name("exclusive-progress-updates")
