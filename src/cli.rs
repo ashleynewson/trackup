@@ -12,7 +12,6 @@ pub fn get_app() -> App<'static, 'static> {
                 .value_name("TRACING_PATH")
                 .help("Path to kernel tracing directory within a debugfs")
                 .takes_value(true)
-                .default_value("/sys/kernel/debug/tracing")
         )
         .arg(
             Arg::with_name("sys-path")
@@ -21,7 +20,6 @@ pub fn get_app() -> App<'static, 'static> {
                 .value_name("SYS_PATH")
                 .help("Path to sysfs")
                 .takes_value(true)
-                .default_value("/sys")
         )
         .arg(
             Arg::with_name("trace-buffer-size")
@@ -30,7 +28,6 @@ pub fn get_app() -> App<'static, 'static> {
                 .value_name("BUFFER_SIZE_KB")
                 .help("Per-CPU size of kernel tracing buffer in KB")
                 .takes_value(true)
-                .default_value("8192")
         )
         .arg(
             Arg::with_name("progress-period")
