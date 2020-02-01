@@ -50,11 +50,11 @@ impl BlkEvent {
             return None;
         }
         let mut event = unsafe {
-            let mut event: BlkEvent = ::std::mem::uninitialized();
-            let buffer = ::std::slice::from_raw_parts_mut(&mut event as *mut BlkEvent as *mut u8, event_size);
+            let mut event = ::std::mem::MaybeUninit::<BlkEvent>::uninit();
+            let buffer = ::std::slice::from_raw_parts_mut(event.as_mut_ptr() as *mut u8, event_size);
             let bytes_read = libc::read(trace_pipe_fd, buffer.as_mut_ptr() as *mut c_void, event_size as size_t);
             if bytes_read == event_size as ssize_t {
-                event
+                event.assume_init()
             } else if bytes_read == 0 {
                 return None;
             } else if bytes_read < 0 {

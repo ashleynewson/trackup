@@ -61,7 +61,7 @@ pub fn task_loop(config: &Config, management_interface: &ManagementInterface, in
     let run = |manifest| {
         eprintln!("Starting backup");
         let result = crate::copier::run(config, &manifest, management_interface);
-        if let Err(e) = result {
+        if let Err(e) = &result {
             eprintln!("Backup failed: {:?}", e);
         }
         Some(LastResult {

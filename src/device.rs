@@ -29,12 +29,14 @@ pub struct DeviceFile {
 impl Device {
     pub fn from_file(config: &Config, device_file: &DeviceFile) -> Result<Self, String> {
         let cpath = CString::new(device_file.path.to_str().unwrap()).unwrap();
-        let stat_result = unsafe {
-            let mut stat_result: libc::stat = ::std::mem::uninitialized();
-            if libc::stat(cpath.as_ptr(), &mut stat_result as *mut libc::stat) < 0 {
-                return Err(format!("Could not stat device"));
+        let stat_result = {
+            let mut stat_result = ::std::mem::MaybeUninit::<libc::stat>::uninit();
+            unsafe {
+                if libc::stat(cpath.as_ptr(), stat_result.as_mut_ptr()) < 0 {
+                    return Err(format!("Could not stat device"));
+                }
+                stat_result.assume_init()
             }
-            stat_result
         };
 
         let major = unsafe{libc::major(stat_result.st_rdev)};

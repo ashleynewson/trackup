@@ -58,35 +58,44 @@ fn main() {
         }
     }
 
-    let manifest = if let Some(manifest_path) = matches.value_of("manifest") {
-        match trackup::control::interface::read_manifest_file(Path::new(manifest_path)) {
-            Ok(manifest) => manifest,
-            Err(e) => {
-                panic!("Failed to load manifest file: {}", e);
-            },
-        }
-    } else {
-        let chunk_size: usize = matches.value_of("chunk-size").unwrap().parse().unwrap();
-        let reuse_output = matches.is_present("reuse");
-
-        let mut jobs = Vec::new();
-        if let Some(mut copy_it) = matches.values_of("copy") {
-            while let (Some(source), Some(destination)) = (copy_it.next(), copy_it.next()) {
-                jobs.push(Job {
-                    source: PathBuf::from(source),
-                    destination: PathBuf::from(destination),
-                    chunk_size,
-                    reuse_output,
-                });
+    let manifest =
+        if let Some(manifest_path) = matches.value_of("manifest") {
+            match trackup::control::interface::read_manifest_file(Path::new(manifest_path)) {
+                Ok(manifest) => manifest,
+                Err(e) => {
+                    panic!("Failed to load manifest file: {}", e);
+                },
             }
-        }
+        } else {
+            let chunk_size: usize = matches.value_of("chunk-size").unwrap().parse().unwrap();
+            let reuse_output = matches.is_present("reuse");
 
-        Manifest {
-            jobs,
-            do_sync: true,
-            locking: None,
-        }
-    };
+            let mut jobs = Vec::new();
+            if let Some(mut copy_it) = matches.values_of("copy") {
+                while let (Some(source), Some(destination)) = (copy_it.next(), copy_it.next()) {
+                    jobs.push(Job {
+                        source: PathBuf::from(source),
+                        storage: trackup::control::Storage {
+                            destination: PathBuf::from(destination),
+                            storage_policy: trackup::control::StoragePolicy::Full,
+                            format: trackup::control::StorageFormat::Raw,
+                        },
+                        checksum: None,
+                        chunk_size,
+                        reuse_output,
+                    });
+                }
+            }
+
+            Manifest {
+                jobs,
+                do_sync: true,
+                locking: None,
+                state_path: None,
+                parent_state_path: None,
+                store_path: None,
+            }
+        };
 
     let daemon_mode = matches.is_present("daemon");
 

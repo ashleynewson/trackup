@@ -4,9 +4,10 @@ extern crate crossbeam;
 extern crate serde_json;
 
 mod alias_tree;
+mod checksums;
 mod chunk;
 mod device;
-mod backup_file;
+mod backup;
 mod chunk_tracker;
 mod change_logger;
 mod writer;
@@ -16,3 +17,5 @@ pub mod control;
 pub mod server;
 pub mod cli;
 pub mod lock;
+pub mod state;
+mod storage;

@@ -8,7 +8,7 @@ use serde::{Serialize,Deserialize};
 
 
 // Just helps label what's option because there's no proper default.
-type Required<T> = Option<T>;
+pub type Required<T> = Option<T>;
 
 pub trait Internalize<O> {
     fn internalize(&self) -> Result<O,String>;
@@ -24,7 +24,7 @@ impl<O, I: Internalize<O>> Internalize<Vec<O>> for Vec<I> {
     }
 }
 
-trait WrappedInternalize<O, W> {
+pub trait WrappedInternalize<O, W> {
     fn maybe_internalize(&self) -> Result<W,String>;
     fn require_internalize(&self) -> Result<O,String>;
 }
@@ -48,7 +48,7 @@ impl<O, I: Internalize<O>> WrappedInternalize<O,Option<O>> for Option<I> {
     }
 }
 
-trait Require<T> {
+pub trait Require<T> {
     fn require(&self) -> Result<T,String>;
 }
 impl<T: Clone> Require<T> for Required<T> {
@@ -60,7 +60,7 @@ impl<T: Clone> Require<T> for Required<T> {
     }
 }
 
-trait Maybe<I,O> {
+pub trait Maybe<I,O> {
     fn maybe<F: Fn(&I)->Result<O,String>>(&self, filter: F) -> Result<Option<O>,String>;
 }
 impl<I,O> Maybe<I,O> for Option<I> {
@@ -167,6 +167,9 @@ struct Manifest {
     pub jobs: Vec<Job>,
     pub do_sync: bool,
     pub locking: Option<Locking>,
+    pub state: Option<PathBuf>,
+    pub parent_state: Option<PathBuf>,
+    pub store: Option<PathBuf>,
 }
 
 impl Default for Manifest {
@@ -175,6 +178,9 @@ impl Default for Manifest {
             jobs: Vec::new(),
             do_sync: true,
             locking: None,
+            state: None,
+            parent_state: None,
+            store: None,
         }
     }
 }
@@ -187,6 +193,9 @@ impl Internalize<super::Manifest> for Manifest {
             jobs,
             do_sync: self.do_sync,
             locking,
+            state_path: self.state.clone(),
+            parent_state_path: self.parent_state.clone(),
+            store_path: self.store.clone(),
         })
     }
 }
@@ -318,10 +327,110 @@ impl Internalize<super::Locking> for Locking {
 }
 
 #[derive(Clone,Serialize,Deserialize)]
+#[serde(rename_all="snake_case")]
+enum StoragePolicy {
+    Full,
+    Incremental,
+    Volatile,
+}
+
+impl Internalize<super::StoragePolicy> for StoragePolicy {
+    fn internalize(&self) -> Result<super::StoragePolicy,String> {
+        Ok(match self {
+            StoragePolicy::Full        => super::StoragePolicy::Full,
+            StoragePolicy::Incremental => super::StoragePolicy::Incremental,
+            StoragePolicy::Volatile    => super::StoragePolicy::Volatile,
+        })
+    }
+}
+
+#[derive(Clone,Serialize,Deserialize)]
+#[serde(rename_all="snake_case")]
+enum StorageFormat {
+    Raw,
+    Sparse(crate::storage::sparse::InterfaceParameters),
+    Null,
+}
+
+impl Internalize<super::StorageFormat> for StorageFormat {
+    fn internalize(&self) -> Result<super::StorageFormat,String> {
+        Ok(match self {
+            StorageFormat::Raw => super::StorageFormat::Raw,
+            StorageFormat::Sparse(parameters) => super::StorageFormat::Sparse(parameters.internalize()?),
+            StorageFormat::Null => super::StorageFormat::Null,
+        })
+    }
+}
+
+#[derive(Clone,Serialize,Deserialize)]
+#[serde(default)]
+struct Storage {
+    pub destination: Required<PathBuf>,
+    pub storage_policy: StoragePolicy,
+    pub format: StorageFormat,
+}
+
+impl Default for Storage {
+    fn default() -> Self {
+        Self {
+            destination: None,
+            storage_policy: StoragePolicy::Full,
+            format: StorageFormat::Raw,
+        }
+    }
+}
+
+impl Internalize<super::Storage> for Storage {
+    fn internalize(&self) -> Result<super::Storage,String> {
+        Ok(super::Storage {
+            destination: self.destination.require()?,
+            storage_policy: self.storage_policy.internalize()?,
+            format: self.format.internalize()?,
+        })
+    }
+}
+
+#[derive(Clone,Serialize,Deserialize)]
+#[serde(default)]
+struct Checksum {
+    pub destination: Required<PathBuf>,
+    pub storage_policy: StoragePolicy,
+    pub algorithm: String,
+    pub size: usize,
+    /// If true, checksums will be used to deduplicate data. Needed for incrementals.
+    pub trust: bool,
+}
+
+impl Default for Checksum {
+    fn default() -> Self {
+        Self {
+            destination: None,
+            storage_policy: StoragePolicy::Full,
+            algorithm: String::from("sha256"),
+            size: 32,
+            trust: true,
+        }
+    }
+}
+
+impl Internalize<super::Checksum> for Checksum {
+    fn internalize(&self) -> Result<super::Checksum,String> {
+        Ok(super::Checksum {
+            destination: self.destination.require()?,
+            storage_policy: self.storage_policy.internalize()?,
+            algorithm: self.algorithm.clone(),
+            size: self.size,
+            trust: self.trust,
+        })
+    }
+}
+
+#[derive(Clone,Serialize,Deserialize)]
 #[serde(default)]
 struct Job {
     pub source: Required<PathBuf>,
-    pub destination: Required<PathBuf>,
+    pub storage: Required<Storage>,
+    pub checksum: Option<Checksum>,
     pub chunk_size: Required<usize>,
     pub reuse_output: bool,
 }
@@ -330,7 +439,8 @@ impl Default for Job {
     fn default() -> Self {
         Self {
             source: None,
-            destination: None,
+            storage: None,
+            checksum: None,
             chunk_size: None,
             reuse_output: false,
         }
@@ -348,7 +458,8 @@ impl Internalize<super::Job> for Job {
         }
         Ok(super::Job {
             source: self.source.require()?,
-            destination: self.destination.require()?,
+            storage: self.storage.require_internalize()?,
+            checksum: self.checksum.maybe_internalize()?,
             chunk_size,
             reuse_output: self.reuse_output,
         })

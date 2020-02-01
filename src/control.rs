@@ -44,10 +44,43 @@ pub struct Config {
 pub const PLAIN_DIAGRAM_CELLS: [&str; 4] = ["#", "*", ".", "o"];
 pub const COLOR_DIAGRAM_CELLS: [&str; 4] = ["\x1b[42m#", "\x1b[41m*", "\x1b[100m.", "\x1b[44mo"];
 
-#[derive(Clone,Serialize,Deserialize)]
+
+#[derive(Eq,PartialEq,Clone,Copy,Serialize,Deserialize,Debug)]
+pub enum StoragePolicy {
+    Full,
+    Incremental,
+    Volatile,
+}
+
+#[derive(Eq,PartialEq,Clone,Serialize,Deserialize,Debug)]
+pub enum StorageFormat {
+    Raw,
+    Sparse(crate::storage::sparse::Parameters),
+    Null,
+}
+
+#[derive(Eq,PartialEq,Clone,Serialize,Deserialize)]
+pub struct Checksum {
+    pub destination: PathBuf,
+    pub storage_policy: StoragePolicy,
+    pub algorithm: String,
+    pub size: usize,
+    /// If true, checksums will be used to deduplicate data. Needed for incrementals.
+    pub trust: bool,
+}
+
+#[derive(Eq,PartialEq,Clone,Serialize,Deserialize)]
+pub struct Storage {
+    pub destination: PathBuf,
+    pub storage_policy: StoragePolicy,
+    pub format: StorageFormat,
+}
+
+#[derive(Eq,PartialEq,Clone,Serialize,Deserialize)]
 pub struct Job {
     pub source: PathBuf,
-    pub destination: PathBuf,
+    pub storage: Storage,
+    pub checksum: Option<Checksum>,
     pub chunk_size: usize,
     pub reuse_output: bool,
 }
@@ -65,6 +98,9 @@ pub struct Manifest {
     pub jobs: Vec<Job>,
     pub do_sync: bool,
     pub locking: Option<Locking>,
+    pub state_path: Option<PathBuf>,
+    pub parent_state_path: Option<PathBuf>,
+    pub store_path: Option<PathBuf>,
 }
 
 #[derive(Clone,Serialize,Deserialize)]
@@ -90,7 +126,7 @@ pub struct RunStatus {
 pub struct LastResult {
     pub manifest: Manifest,
     pub time: std::time::SystemTime,
-    pub result: Result<(),()>,
+    pub result: Result<(),String>,
 }
 
 #[derive(Clone,Serialize,Deserialize)]

@@ -1,3 +1,4 @@
+use std::sync::Mutex;
 use std::sync::mpsc::channel;
 use std::sync::mpsc::sync_channel;
 use std::sync::mpsc::{TryRecvError,TrySendError};
@@ -7,24 +8,21 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use crate::device::{Device,DeviceFile};
-use crate::backup_file::BackupFile;
+use crate::backup::Backup;
 use crate::chunk_tracker::{ChunkTracker,calculate_display_detail};
 use crate::control::{Request,Response,Status,RunStatus,JobProgress,ManagementInterface,Config,Manifest};
 use crate::lock::AutoLocker;
+use crate::state::{State,Health};
 
-
-pub fn run(config: &Config, manifest: &Manifest, management_interface: &ManagementInterface) -> Result<(),()> {
+pub fn run(config: &Config, manifest: &Manifest, management_interface: &ManagementInterface) -> Result<(),String> {
+    let mut state = State::new(manifest)?;
+    state.commit()?;
     let mut sources = Vec::new();
-    let mut destinations = Vec::new();
+    let mut destinations: Vec<Backup> = Vec::new();
     for job in &manifest.jobs {
         let source = DeviceFile::from_path(&job.source).expect("Could not open device");
-        destinations.push(
-            if job.reuse_output {
-                BackupFile::use_file(&job.destination, source.get_size()).expect("Could not open backup file (reuse)")
-            } else {
-                BackupFile::create_file(&job.destination, source.get_size()).expect("Could not open backup file (create)")
-            }
-        );
+        let source_size = source.get_size();
+        destinations.push(Backup::new(&job, source_size, &state)?);
         sources.push(source);
     }
 
@@ -34,7 +32,7 @@ pub fn run(config: &Config, manifest: &Manifest, management_interface: &Manageme
         |source| {source.get_path().to_path_buf()}
     ).collect();
     let destination_paths: Vec<PathBuf> = destinations.iter().map(
-        |destination| {destination.get_path().to_path_buf()}
+        |destination| {destination.get_storage_path().to_path_buf()}
     ).collect();
 
     let devices = sources.iter().map(
@@ -64,7 +62,9 @@ pub fn run(config: &Config, manifest: &Manifest, management_interface: &Manageme
     let (write_queue_produce, write_queue_consume) = sync_channel(4);
     let (sync_barrier_produce, sync_barrier_consume) = channel();
 
-    crossbeam::scope(|thread_scope| {
+    let thread_errors: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    let main_result: Result<(),String> = crossbeam::scope(|thread_scope| -> Result<(),String> {
         {
             let devices_ref = &devices;
             thread_scope.builder()
@@ -76,10 +76,13 @@ pub fn run(config: &Config, manifest: &Manifest, management_interface: &Manageme
         }
         {
             let destinations = &mut destinations;
+            let thread_errors_ref = &thread_errors;
             thread_scope.builder()
                 .name("writer".to_string())
                 .spawn(move |_| {
-                    crate::writer::run(destinations, write_queue_consume);
+                    if let Err(e) = crate::writer::run(destinations, write_queue_consume) {
+                        thread_errors_ref.lock().unwrap().push(e);
+                    }
                 })
                 .unwrap();
         }
@@ -96,7 +99,7 @@ pub fn run(config: &Config, manifest: &Manifest, management_interface: &Manageme
             Some(progress_logging) => {
                 Some(calculate_display_detail(total_chunk_count, progress_logging.max_diagram_size))
             },
-            None => None
+            None => None,
         };
 
         let update_chunk_trackers = |chunk_trackers: &mut Vec<ChunkTracker>| {
@@ -172,6 +175,8 @@ pub fn run(config: &Config, manifest: &Manifest, management_interface: &Manageme
 
         // Only stop when we've done an (optional) sync whilst locked without any events occuring after it.
         let mut consistent = false;
+
+        state.milestone(Health::Partial, "Initialisation completed. Copying process started")?;
         'consistency_loop: while !consistent {
             let locked = !first_go && auto_locker.check() == crate::lock::AutoLockerStatus::Locked;
             let should_sync = first_go || (locked && manifest.do_sync);
@@ -285,9 +290,32 @@ pub fn run(config: &Config, manifest: &Manifest, management_interface: &Manageme
             println!("Chunk writes: {} (efficiency is {})", total_writes, total_chunk_count as f64 / total_writes as f64);
         } else {
             println!("Copying aborted!");
+            return Err(format!("Copying aborted"));
         }
+        Ok(())
     }).unwrap();
 
+    if let Err(e) = main_result {
+        thread_errors.lock().unwrap().push(e);
+    }
+    let thread_errors = thread_errors.into_inner().unwrap();
+    if thread_errors.len() > 0 {
+        let error = format!("Backup failure: {}", thread_errors.join("; "));
+        if let Err(e) = state.milestone(Health::Failure, &error) {
+            return Err(format!("{}. Additionally, this error could not be recorded to the state file: {}", error, e));
+        }
+        return Err(error);
+    }
+
+    state.mark_finished();
+
+    state.milestone(Health::Finishing, "Snapshot reached - commiting data")?;
+
+    for destination in &mut destinations {
+        destination.commit()?;
+    }
+
+    state.milestone(Health::Success, "Copying completed successfully")?;
     println!("All copier threads finished");
 
     Ok(())
