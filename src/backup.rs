@@ -10,12 +10,15 @@ use crate::storage::Storage;
 use crate::storage::raw::RawStorage;
 use crate::storage::sparse::SparseStorage;
 use crate::storage::null::NullStorage;
+use crate::storage::dedicated_index::DedicatedIndex;
 
 use crate::checksums::{Checksums,ChecksumDiff};
 use crate::checksums::sparse::SparseChecksums;
 use crate::checksums::null::NullChecksums;
 
 
+/// Used for creating a backup of a single device, including image and
+/// checksums.
 pub struct Backup {
     job: Job,
     storage: Box<dyn Storage + Send>,
@@ -43,7 +46,18 @@ impl Backup {
                         StoragePolicy::Incremental => {}, // OK
                         x => return Err(format!("Sparse backup format only supports the Full and Incremental storage policies - not {:?}", x)),
                     }
-                    Box::new(SparseStorage::create_file(&state.stored_path(&job.storage.destination), size, job.chunk_size, &parameters)?)
+                    let index =
+                        if parameters.append_only && !parameters.save_index {
+                            // Don't bother with an index if we are
+                            // appending-only and not requesting an
+                            // index be saved.
+                            None
+                        } else {
+                            // Otherwise, we really do actually need an
+                            // index - even if we're not saving it.
+                            Some(Box::new(DedicatedIndex::new(chunk_count)))
+                        };
+                    Box::new(SparseStorage::create_file(&state.stored_path(&job.storage.destination), size, job.chunk_size, &parameters, index)?)
                 },
                 StorageFormat::Null => {
                     match &job.storage.storage_policy {

@@ -7,7 +7,7 @@ use std::path::{Path,PathBuf};
 use std::fs::File;
 use std::io::{Read,Write,Seek,SeekFrom};
 use crate::chunk::Chunk;
-use super::Storage;
+use super::{Storage,StorageProperties};
 
 pub struct RawStorage {
     path: PathBuf,
@@ -39,7 +39,7 @@ impl RawStorage {
         })
     }
 
-    pub fn use_file(path: &Path, size: u64, chunk_size: usize, writeable: bool) -> Result<Self, String> {
+    pub fn open_file(path: &Path, size: u64, chunk_size: usize, writeable: bool) -> Result<Self, String> {
         let mut file = match std::fs::OpenOptions::new().write(writeable).open(path) {
             Ok(x) => x,
             Err(_) => {
@@ -66,6 +66,21 @@ impl RawStorage {
     pub fn get_path(&self) -> &Path {
         self.path.as_path()
     }
+
+    fn inspect_file(path: &Path) -> Result<StorageProperties,String> {
+        match File::open(path) {
+            Ok(mut file) => {
+                let size = file.seek(SeekFrom::End(0)).expect("Backup seek failed");
+                Ok(StorageProperties {
+                    size,
+                    indexed: true, // It's fully predictable
+                })
+            }
+            Err(e) => {
+                return Err(format!("Could not open raw backup file {} for inspection: {:?}", path.display(), e))
+            },
+        }
+    }
 }
 
 impl Storage for RawStorage {
@@ -84,6 +99,7 @@ impl Storage for RawStorage {
         };
         Ok(Some(chunk))
     }
+
     fn read_chunk_at(&mut self, chunk_number: usize) -> Result<Option<Chunk>,String> {
         let offset: u64 = (self.chunk_size as u64).checked_mul(chunk_number as u64).unwrap();
         if offset >= self.size {
@@ -93,6 +109,7 @@ impl Storage for RawStorage {
         let chunk = self.read_chunk()?.unwrap();
         Ok(Some(chunk))
     }
+
     fn write_chunk(&mut self, chunk: &Chunk) -> Result<(),String> {
         if !self.writeable {
             panic!("Backup is not writeable");
@@ -103,6 +120,7 @@ impl Storage for RawStorage {
         self.file.write_all(&chunk.data).expect("Write to backup failed");
         Ok(())
     }
+
     fn commit(&mut self) -> Result<(),String> {
         if let Err(e) = self.file.sync_all() {
             return Err(format!("Failed to sync all data before closing: {:?}", e));

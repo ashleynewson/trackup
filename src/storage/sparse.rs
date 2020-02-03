@@ -83,7 +83,7 @@ use std::cell::RefCell;
 use serde::{Serialize,Deserialize};
 use crate::quick_io::{read_be_u64,write_be_u64,read_skip_run,write_skip_run,CountedWrite};
 use crate::chunk::Chunk;
-use super::Storage;
+use super::{Storage,StorageProperties,Index};
 
 
 #[derive(Serialize,Deserialize)]
@@ -95,7 +95,7 @@ struct FileHeader {
     indexed: bool,
 }
 
-pub struct SparseStorage {
+pub struct SparseStorage<IndexType> {
     path: PathBuf,
     file: File,
     size: u64,
@@ -117,14 +117,19 @@ pub struct SparseStorage {
     /// offset from the start of the file, the index stored on disk is
     /// relative to the start of the numbered chunks
     /// (numbered_chunks_start).
-    index: Option<Vec<u64>>,
+    index: Option<Box<IndexType>>,
+    save_index: bool,
 }
 
 #[derive(Eq,PartialEq,Clone,Serialize,Deserialize,Debug)]
 pub struct Parameters {
-    index: bool,
-    append_only: bool,
-    optimize: bool,
+    /// Whether or not to save an index.
+    ///
+    /// Note that an index may or may not be used whilst processing
+    /// regardless of this value.
+    pub save_index: bool,
+    pub append_only: bool,
+    pub optimize: bool,
 }
 
 #[derive(Eq,PartialEq,Clone,Serialize,Deserialize,Debug)]
@@ -146,7 +151,7 @@ impl Default for InterfaceParameters {
 impl crate::control::interface::Internalize<Parameters> for InterfaceParameters {
     fn internalize(&self) -> Result<Parameters,String> {
         Ok(Parameters {
-            index: self.index,
+            save_index: self.index,
             append_only: self.append_only,
             optimize: self.optimize,
         })
@@ -154,8 +159,8 @@ impl crate::control::interface::Internalize<Parameters> for InterfaceParameters 
 }
 
 
-impl SparseStorage {
-    pub fn create_file(path: &Path, size: u64, chunk_size: usize, parameters: &Parameters) -> Result<Self, String> {
+impl<IndexType: Index> SparseStorage<IndexType> {
+    pub fn create_file(path: &Path, size: u64, chunk_size: usize, parameters: &Parameters, index: Option<Box<IndexType>>) -> Result<Self, String> {
         let chunk_count: usize = ((size + chunk_size as u64 - 1) / chunk_size as u64) as usize;
 
         let mut file = match File::create(path) {
@@ -168,16 +173,11 @@ impl SparseStorage {
             size,
             chunk_size,
             optimized: false,
-            indexed: parameters.index,
+            indexed: parameters.save_index && index.is_some(),
         };
         if let Err(e) = serde_json::to_writer::<&File,FileHeader>(&mut file, &header) {
             return Err(format!("Could not write header to backup file {}: {:?}", path.display(), e));
         }
-        let index = if parameters.index {
-            Some(vec![std::u64::MAX; chunk_count])
-        } else {
-            None
-        };
         let numbered_chunks_start = if !parameters.append_only {
             match file.seek(std::io::SeekFrom::Current(0)) {
                 Ok(offset) => Some(offset),
@@ -203,6 +203,7 @@ impl SparseStorage {
             end_of_chunks: false,
             optimize_after: parameters.optimize,
             index,
+            save_index: parameters.save_index,
         })
     }
 
@@ -210,7 +211,7 @@ impl SparseStorage {
         self.path.as_path()
     }
 
-    fn open_file(path: &Path) -> Result<SparseStorage,String> {
+    fn open_file(path: &Path, mut index: Option<Box<IndexType>>) -> Result<Self,String> {
         match File::open(path) {
             Ok(mut file) => {
                 let header_result = {
@@ -229,66 +230,62 @@ impl SparseStorage {
                         };
                         let seekable = numbered_chunks_start.is_some();
                         let chunk_count: usize = ((header.size + header.chunk_size as u64 - 1) / header.chunk_size as u64) as usize;
-                        let index = if seekable {
-                            if header.indexed {
-                                let numbered_chunks_start = numbered_chunks_start.unwrap();
-                                let index_end = file.seek(SeekFrom::End(-8)).expect("Could not seek to index size record");
-                                let index_size = read_be_u64(&mut file)?;
-                                let index_start = match index_end.checked_sub(index_size) {
-                                    Some(index_start) => {
-                                        // Header + mandatory end of chunks marker
-                                        if index_start < numbered_chunks_start.checked_add(8).unwrap() {
-                                            return Err(format!("index size suggests index start is before beginning of chunks"));
-                                        }
-                                        index_start
-                                    },
-                                    None => return Err(format!("index size suggests index start is before beginning of file")),
-                                };
-                                file.seek(SeekFrom::Start(index_start)).expect("Could not seek to index");
-
-                                let mut index = vec![std::u64::MAX; chunk_count];
-                                {
-                                    let index = RefCell::new(&mut index);
-                                    read_skip_run(
-                                        &mut file,
-                                        chunk_count as u64,
-                                        |read, position| {
-                                            let raw_position: u64 = read_be_u64(read)?;
-                                            // Convert from chunk data-space to file-space
-                                            let remapped_position =
-                                                match raw_position.checked_add(numbered_chunks_start) {
-                                                    Some(x) => {
-                                                        if x == std::u64::MAX {
-                                                            return Err(format!("Index position converts to reserved value when converted to file space"));
-                                                        }
-                                                        x
-                                                    },
-                                                    None => {
-                                                        return Err(format!("Index position overflows when converted to file space"));
-                                                    },
-                                                };
-                                            (**index.borrow_mut())[position as usize] = remapped_position;
-                                            Ok(())
-                                        },
-                                        |position| {
-                                            (**index.borrow_mut())[position as usize] = std::u64::MAX;
-                                            Ok(())
-                                        },
-                                    )?;
-                                }
-                                let test_index_end = file.seek(SeekFrom::Current(0)).expect("Could not check file position");
-                                if test_index_end != index_end {
-                                    return Err(format!("Index size or index structure is incorrect for {}", path.display()));
-                                }
-                                file.seek(SeekFrom::Start(numbered_chunks_start)).expect("Could not seek backup file after reading index");
-                                Some(index)
-                            } else {
-                                eprintln!("Backup file has index, but is not seekable.");
-                                None
+                        if let Some(mut index) = index.as_mut() {
+                            if !header.indexed {
+                                return Err(format!("Index not included in backup {}", path.display()));
                             }
-                        } else {
-                            None
-                        };
+                            if !seekable {
+                                return Err(format!("Index cannot be used as backup {} is not seekable", path.display()));
+                            }
+                            let numbered_chunks_start = numbered_chunks_start.unwrap();
+                            let index_end = file.seek(SeekFrom::End(-8)).expect("Could not seek to index size record");
+                            let index_size = read_be_u64(&mut file)?;
+                            let index_start = match index_end.checked_sub(index_size) {
+                                Some(index_start) => {
+                                    // Header + mandatory end of chunks marker
+                                    if index_start < numbered_chunks_start.checked_add(8).unwrap() {
+                                        return Err(format!("index size suggests index start is before beginning of chunks"));
+                                    }
+                                    index_start
+                                },
+                                None => return Err(format!("index size suggests index start is before beginning of file")),
+                            };
+                            file.seek(SeekFrom::Start(index_start)).expect("Could not seek to index");
+
+                            {
+                                let index = RefCell::new(&mut index);
+                                read_skip_run(
+                                    &mut file,
+                                    chunk_count as u64,
+                                    |read, position| {
+                                        let raw_position: u64 = read_be_u64(read)?;
+                                        // Convert from chunk data-space to file-space
+                                        let remapped_position =
+                                            match raw_position.checked_add(numbered_chunks_start) {
+                                                Some(x) => {
+                                                    if x == std::u64::MAX {
+                                                        return Err(format!("Index position converts to reserved value when converted to file space"));
+                                                    }
+                                                    x
+                                                },
+                                                None => {
+                                                    return Err(format!("Index position overflows when converted to file space"));
+                                                },
+                                            };
+                                        (**index.borrow_mut()).replace(position as usize, remapped_position);
+                                        Ok(())
+                                    },
+                                    |_position| {
+                                        Ok(())
+                                    },
+                                )?;
+                            }
+                            let test_index_end = file.seek(SeekFrom::Current(0)).expect("Could not check file position");
+                            if test_index_end != index_end {
+                                return Err(format!("Index size or index structure is incorrect for {}", path.display()));
+                            }
+                            file.seek(SeekFrom::Start(numbered_chunks_start)).expect("Could not seek backup file after reading index");
+                        }
                         Ok(SparseStorage{
                             path: path.to_path_buf(),
                             file,
@@ -303,10 +300,11 @@ impl SparseStorage {
                             end_of_chunks: false,
                             optimize_after: false,
                             index,
+                            save_index: false, // Doesn't make sense if not writeable
                         })
                     },
                     Err(e) => {
-                        return Err(format!("Failed to read a valid config struture from file {}: {:?}", path.display(), e))
+                        return Err(format!("Failed to read a valid sparse backup header from file {}: {:?}", path.display(), e))
                     },
                 }
             },
@@ -315,9 +313,35 @@ impl SparseStorage {
             },
         }
     }
+
+    fn inspect_file(path: &Path) -> Result<StorageProperties,String> {
+        match File::open(path) {
+            Ok(mut file) => {
+                let header_result = {
+                    // Doing it this way means parsing stops as soon as the JSON object is read.
+                    let mut deserializer = serde_json::Deserializer::from_reader(&mut file);
+                    FileHeader::deserialize(&mut deserializer)
+                };
+                match header_result {
+                    Ok(header) => {
+                        Ok(StorageProperties {
+                            size: header.size,
+                            indexed: header.indexed,
+                        })
+                    }
+                    Err(e) => {
+                        return Err(format!("Failed to read a valid sparse backup header from file {} for inspection: {:?}", path.display(), e))
+                    },
+                }
+            },
+            Err(e) => {
+                return Err(format!("Could not open sparse backup file {} for inspection: {:?}", path.display(), e))
+            },
+        }
+    }
 }
 
-impl Storage for SparseStorage {
+impl<IndexType: Index> Storage for SparseStorage<IndexType> {
     fn write_chunk(&mut self, chunk: &Chunk) -> Result<(),String> {
         if !self.writeable {
             panic!("Storage is not writeable");
@@ -328,11 +352,11 @@ impl Storage for SparseStorage {
         let chunk_number = chunk.chunk_number(self.chunk_size, self.size);
         let write_at = if self.seekable {
             if let Some(index) = &self.index {
-                match index[chunk_number] {
-                    std::u64::MAX => {
+                match index.lookup(chunk_number) {
+                    None => {
                         self.file.seek(SeekFrom::End(0)).expect("Backup file seek failed")
                     },
-                    file_offset => {
+                    Some(file_offset) => {
                         self.file.seek(SeekFrom::Start(file_offset)).expect("Backup file seek failed")
                     }
                 }
@@ -362,7 +386,7 @@ impl Storage for SparseStorage {
             if write_at == std::u64::MAX {
                 panic!("Reserved index value cannot be used.");
             }
-            index[chunk_number] = write_at;
+            index.replace(chunk_number, write_at);
         }
         if self.seekable {
             if self.numbered_chunks_end.unwrap() == write_at {
@@ -382,12 +406,12 @@ impl Storage for SparseStorage {
             panic!("chunk number exceeds chunk count");
         }
         if let Some(index) = &self.index {
-            match index[chunk_number] {
-                std::u64::MAX => {
+            match index.lookup(chunk_number) {
+                None => {
                     // Chunk not contained in this backup
                     Ok(None)
                 },
-                file_offset => {
+                Some(file_offset) => {
                     self.file.seek(SeekFrom::Start(file_offset)).expect("Seek failed during backup");
                     let chunk = self.read_chunk()?.expect("No chunk at indexed location");
                     if chunk.offset != (chunk_number as u64) * (self.chunk_size as u64) {
@@ -451,25 +475,26 @@ impl Storage for SparseStorage {
         write_be_u64(&mut self.file, std::u64::MAX)?;
         if let Some(index) = &self.index {
             let numbered_chunks_start = self.numbered_chunks_start.unwrap();
-            // Write index
-            let index_size: u64 = {
+            // Write index and record its size
+            let index_size = {
                 let mut counted_write = CountedWrite::new(&mut self.file);
                 write_skip_run(
                     &mut counted_write,
                     self.chunk_count as u64,
                     |write, position| {
-                        let position = index[position as usize];
+                        let position = index.lookup(position as usize).unwrap();
                         // Convert from file-space to chunk data-space
                         let remapped_position = position.checked_sub(numbered_chunks_start).expect("Bogus internal index value underflows when remapped");
                         write_be_u64(write, remapped_position)?;
                         Ok(())
                     },
                     |position| {
-                        Ok(index[position as usize] != std::u64::MAX)
+                        Ok(index.lookup(position as usize).is_some())
                     },
                 )?;
                 counted_write.get_count()
             };
+            // Write index size
             write_be_u64(&mut self.file, index_size)?;
         }
         if let Err(e) = self.file.sync_all() {

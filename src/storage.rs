@@ -3,6 +3,8 @@ use crate::chunk::Chunk;
 pub mod raw;
 pub mod sparse;
 pub mod null;
+pub mod dedicated_index;
+pub mod shared_index;
 
 pub trait Storage {
     /// Gets the next chunk stored by the storage. Note that there is
@@ -19,4 +21,16 @@ pub trait Storage {
     /// only be called once. Calling multiple times may be considered
     /// a panicking error.
     fn commit(&mut self) -> Result<(),String>;
+}
+
+
+pub struct StorageProperties {
+    pub size: u64,
+    pub indexed: bool,
+}
+
+
+pub trait Index {
+    fn replace(&mut self, chunk_number: usize, offset: u64);
+    fn lookup(&self, chunk_number: usize) -> Option<u64>;
 }
