@@ -3,6 +3,7 @@ use crate::chunk::Chunk;
 pub mod raw;
 pub mod sparse;
 pub mod null;
+pub mod layered;
 pub mod dedicated_index;
 pub mod shared_index;
 
@@ -25,7 +26,13 @@ pub trait Storage {
 
 
 pub struct StorageProperties {
+    /// Logical size of the data represented by the store.
     pub size: u64,
+    /// Whether specific chunks can be looked up with random access.
+    ///
+    /// Note that this does not necessarily mean that the store has an
+    /// explicit index. For example, this is set true for raw backups,
+    /// where chunk positions are predictable.
     pub indexed: bool,
 }
 

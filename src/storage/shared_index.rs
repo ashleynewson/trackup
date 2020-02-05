@@ -4,7 +4,8 @@ use std::rc::Rc;
 use super::Index;
 
 struct SharedIndexInternal {
-    pub top_layer: usize,
+    pub layer_count: usize,
+    pub hole_count: usize,
     pub chunk_layers: Vec<usize>,
     pub chunk_offsets: Vec<u64>,
 }
@@ -14,16 +15,17 @@ struct SharedIndexInternal {
 ///
 /// Used for accessing the logical data of an incremental snapshot,
 /// which may consist of multiple layers of stores.
-//
-// Note that internally, layer 0 means no layer. However, the external
-// interface presents the first layer as layer 0.
+///
+/// Layers are added from the top down. The top layer is layer 0 and
+/// has the highest priority.
 pub struct SharedIndex(Rc<RefCell<SharedIndexInternal>>);
 
 impl SharedIndex {
     pub fn new(chunk_count: usize) -> Self {
         Self(Rc::new(RefCell::new(SharedIndexInternal {
-            top_layer: 0,
-            chunk_layers: vec![0; chunk_count],
+            layer_count: 0,
+            hole_count: chunk_count,
+            chunk_layers: vec![std::usize::MAX; chunk_count],
             chunk_offsets: vec![std::u64::MAX; chunk_count],
         })))
     }
@@ -32,20 +34,23 @@ impl SharedIndex {
         if chunk_count != internal.chunk_offsets.len() {
             panic!("Chunk count mismatch between index layers");
         }
-        internal.top_layer = internal.top_layer + 1;
-        let handle = SharedIndexHandle::new(&self.0, internal.top_layer);
+        let handle = SharedIndexHandle::new(&self.0, internal.layer_count);
+        internal.layer_count = internal.layer_count + 1;
         handle
     }
-    pub fn lookup(&self, chunk_number: usize) -> Option<(usize, u64)> {
+    pub fn lookup_layer(&self, chunk_number: usize) -> Option<usize> {
         let internal = self.0.borrow();
         match internal.chunk_layers[chunk_number] {
-            0 => {
+            std::usize::MAX => {
                 None
             },
             layer => {
-                Some((layer-1, internal.chunk_offsets[chunk_number]))
+                Some(layer)
             }
         }
+    }
+    pub fn is_complete(&self) -> bool {
+        self.0.borrow().hole_count == 0
     }
 }
 
@@ -62,10 +67,8 @@ impl SharedIndexHandle {
             layer,
         }
     }
-    // Note, we use layer 0 internally to mean no layer. However,
-    // externally we want the interface to be zero-indexed.
     pub fn layer_number(&self) -> usize {
-        self.layer - 1
+        self.layer
     }
 }
 
@@ -79,7 +82,10 @@ impl Index for SharedIndexHandle {
             panic!("0xffff_ffff_ffff_ffff is a reserved value not permitted in indexes");
         }
         let mut internal = self.shared_index.borrow_mut();
-        if internal.chunk_layers[chunk_number] <= self.layer {
+        if internal.chunk_layers[chunk_number] >= self.layer {
+            if internal.chunk_layers[chunk_number] == std::usize::MAX {
+                internal.hole_count = internal.hole_count - 1;
+            }
             internal.chunk_layers[chunk_number] = self.layer;
             internal.chunk_offsets[chunk_number] = offset;
         }
@@ -99,7 +105,7 @@ impl Index for SharedIndexHandle {
         if internal.chunk_layers[chunk_number] == self.layer {
             Some(internal.chunk_offsets[chunk_number])
         } else {
-            if self.layer != internal.top_layer {
+            if self.layer != 0 {
                 panic!("Index lookup miss for non-top layers are not expected");
             }
             None

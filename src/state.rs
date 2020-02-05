@@ -15,6 +15,7 @@ pub enum Health {
     Failure,
 }
 
+/// Tracks the files and state of a snapshot.
 #[derive(Clone,Serialize,Deserialize)]
 pub struct State {
     /// A unique name (based on timestamp). Used for filing.
@@ -209,6 +210,13 @@ impl State {
             history
         } else {
             Vec::new()
+        }
+    }
+
+    pub fn parent(&self) -> Option<&State> {
+        match &self.parent {
+            Some(boxed_state) => Some(&**boxed_state),
+            None => None,
         }
     }
 

@@ -50,8 +50,8 @@ impl RawStorage {
         let existing_size = file.seek(SeekFrom::End(0)).expect("Could not determine file size");
         file.seek(SeekFrom::Start(0)).expect("Could not seek back to beginning of backup file");
 
-        if existing_size < size {
-            return Err(format!("Existing backup file is not large enough"));
+        if existing_size != size {
+            return Err(format!("Existing backup file has unexpected size"));
         }
 
         Ok(Self {
@@ -67,7 +67,7 @@ impl RawStorage {
         self.path.as_path()
     }
 
-    fn inspect_file(path: &Path) -> Result<StorageProperties,String> {
+    pub fn inspect_file(path: &Path) -> Result<StorageProperties,String> {
         match File::open(path) {
             Ok(mut file) => {
                 let size = file.seek(SeekFrom::End(0)).expect("Backup seek failed");

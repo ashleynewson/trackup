@@ -161,7 +161,7 @@ impl crate::control::interface::Internalize<Parameters> for InterfaceParameters 
 
 impl<IndexType: Index> SparseStorage<IndexType> {
     pub fn create_file(path: &Path, size: u64, chunk_size: usize, parameters: &Parameters, index: Option<Box<IndexType>>) -> Result<Self, String> {
-        let chunk_count: usize = ((size + chunk_size as u64 - 1) / chunk_size as u64) as usize;
+        let chunk_count = Chunk::chunk_count(size, chunk_size);
 
         let mut file = match File::create(path) {
             Ok(x) => x,
@@ -211,7 +211,7 @@ impl<IndexType: Index> SparseStorage<IndexType> {
         self.path.as_path()
     }
 
-    fn open_file(path: &Path, mut index: Option<Box<IndexType>>) -> Result<Self,String> {
+    pub fn open_file(path: &Path, size: u64, chunk_size: usize, mut index: Option<Box<IndexType>>) -> Result<Self,String> {
         match File::open(path) {
             Ok(mut file) => {
                 let header_result = {
@@ -221,6 +221,12 @@ impl<IndexType: Index> SparseStorage<IndexType> {
                 };
                 match header_result {
                     Ok(header) => {
+                        if header.size != size {
+                            return Err(format!("Backup logical size mismatch"));
+                        }
+                        if header.chunk_size != chunk_size {
+                            return Err(format!("Backup chunk size mismatch"));
+                        }
                         let numbered_chunks_start = match file.seek(SeekFrom::Current(0)) {
                             Ok(offset) => Some(offset),
                             Err(e) => {
@@ -229,7 +235,7 @@ impl<IndexType: Index> SparseStorage<IndexType> {
                             },
                         };
                         let seekable = numbered_chunks_start.is_some();
-                        let chunk_count: usize = ((header.size + header.chunk_size as u64 - 1) / header.chunk_size as u64) as usize;
+                        let chunk_count: usize = Chunk::chunk_count(size, chunk_size);
                         if let Some(mut index) = index.as_mut() {
                             if !header.indexed {
                                 return Err(format!("Index not included in backup {}", path.display()));
@@ -314,7 +320,7 @@ impl<IndexType: Index> SparseStorage<IndexType> {
         }
     }
 
-    fn inspect_file(path: &Path) -> Result<StorageProperties,String> {
+    pub fn inspect_file(path: &Path) -> Result<StorageProperties,String> {
         match File::open(path) {
             Ok(mut file) => {
                 let header_result = {

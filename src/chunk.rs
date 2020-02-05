@@ -6,6 +6,10 @@ pub struct Chunk {
 }
 
 impl Chunk {
+    /// Return the number of chunks required for a given size and chunk_size
+    pub fn chunk_count(size: u64, chunk_size: usize) -> usize {
+        ((size.checked_add(chunk_size as u64).unwrap() - 1) / chunk_size as u64).try_into().expect("Chunk count overflows on this platform")
+    }
     /// Validate offset and return the chunk number (offset / chunk_size)
     pub fn offset_chunk_number(offset: u64, chunk_size: usize, size: u64) -> usize {
         let chunk_number: usize = (offset / (chunk_size as u64)).try_into().expect(&format!("Chunk number from offset {} divided by chunk size {} too large for this platform", offset, chunk_size));
