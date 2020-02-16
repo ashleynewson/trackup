@@ -80,45 +80,41 @@ impl LayeredStorage {
         }
 
         // Add subsequent layers
-        {
-            let mut next_loading_state = Some(state);
-            while let Some(loading_state) = next_loading_state {
-                let job = loading_state.source_to_job(source);
-                let mut shared_index_handle = index.add_layer(chunk_count);
-                let layer: Box<dyn Storage> = match &job.storage.format {
-                    StorageFormat::Raw => {
-                        for chunk_number in 0..chunk_count {
-                            shared_index_handle.replace(chunk_number, chunk_number as u64 * chunk_size as u64);
-                        }
-                        Box::new(RawStorage::open_file(
-                            &job.storage.destination,
-                            size,
-                            chunk_size,
-                            false
-                        )?)
-                    },
-                    StorageFormat::Sparse(_) => {
-                        Box::new(SparseStorage::open_file(
-                            &job.storage.destination,
-                            size,
-                            chunk_size,
-                            Some(Box::new(shared_index_handle))
-                        )?)
-                    },
-                    StorageFormat::Null => {
-                        return Err(format!("Null storage in backup chain"));
-                    },
-                };
-                layers.push(layer);
-                if index.is_complete() {
-                    // Every chunk is fulfilled at some layer, so there's no point adding any more layers.
-                    break;
-                }
-                next_loading_state = loading_state.parent();
+        for loading_state in state.chain() {
+            let job = loading_state.source_to_job(source);
+            let mut shared_index_handle = index.add_layer(chunk_count);
+            let layer: Box<dyn Storage> = match &job.storage.format {
+                StorageFormat::Raw => {
+                    for chunk_number in 0..chunk_count {
+                        shared_index_handle.replace(chunk_number, chunk_number as u64 * chunk_size as u64);
+                    }
+                    Box::new(RawStorage::open_file(
+                        &job.storage.destination,
+                        size,
+                        chunk_size,
+                        false
+                    )?)
+                },
+                StorageFormat::Sparse(_) => {
+                    Box::new(SparseStorage::open_file(
+                        &job.storage.destination,
+                        size,
+                        chunk_size,
+                        Some(Box::new(shared_index_handle))
+                    )?)
+                },
+                StorageFormat::Null => {
+                    return Err(format!("Null storage in backup chain"));
+                },
+            };
+            layers.push(layer);
+            if index.is_complete() {
+                // Every chunk is fulfilled at some layer, so there's no point adding any more layers.
+                break;
             }
-            if next_loading_state.is_none() {
-                eprintln!("Warning: missing chunks in backup chain");
-            }
+        }
+        if !index.is_complete() {
+            eprintln!("Warning: missing chunks in backup chain");
         }
 
         Ok(Self {

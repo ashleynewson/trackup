@@ -207,7 +207,7 @@ impl State {
         panic!("Job with source {} not found", source.display());
     }
 
-    /// Get a vector of all parents (excluding self)
+    /// Get a vector of all parents (starting with the greatest parent, excluding self)
     pub fn history(&self) -> Vec<&State> {
         if let Some(parent) = &self.parent {
             let mut history = parent.history();
@@ -218,11 +218,59 @@ impl State {
         }
     }
 
-    pub fn parent(&self) -> Option<&State> {
+    /// Get a vector of this and all parents (starting with self)
+    pub fn chain(&self) -> Vec<&State> {
+        let mut chain = Vec::new();
+        let mut state = self;
+        loop {
+            chain.push(state);
+            if let Some(next_state) = &state.parent {
+                state = &**next_state;
+            } else {
+                break;
+            }
+        }
+        chain
+    }
+
+    pub fn get_parent(&self) -> Option<&State> {
         match &self.parent {
             Some(boxed_state) => Some(&**boxed_state),
             None => None,
         }
+    }
+
+    pub fn set_parent(&mut self, new_parent: Option<Box<State>>) -> Result<(),String> {
+        if let Some(new_parent) = new_parent {
+            self.check_parent(&*new_parent)?;
+            // Make sure new_parent doesn't contain self as an
+            // ancestor, which would introduce a cyclic dependency.
+            //
+            // Note that the one-mutable-reference guarantees from
+            // rust are not sufficient here. We may have opened up a
+            // state file twice.
+            let new_parent_chain_paths: HashSet<&String> =
+                new_parent
+                .chain()
+                .into_iter()
+                .map(|state| {
+                    &state.name
+                })
+                .collect();
+            if new_parent_chain_paths.contains(&self.name) {
+                return Err(format!(
+                    "Cannot set parent of {} to {}, as {} is a descendant of {}",
+                    &self.name,
+                    &new_parent.name,
+                    &self.name,
+                    &new_parent.name,
+                ));
+            }
+            self.parent = Some(new_parent);
+        } else {
+            self.parent = None;
+        }
+        Ok(())
     }
 
     fn validate(&self) -> Result<(),String> {
