@@ -5,6 +5,7 @@ use ::std::collections::{HashSet,HashMap};
 use ::std::fs::File;
 use ::std::path::{Path,PathBuf};
 use crate::control::{Job,Manifest};
+use crate::store_state::StoreState;
 
 #[derive(Eq,PartialEq,Clone,Serialize,Deserialize)]
 pub enum Health {
@@ -21,18 +22,16 @@ pub struct State {
     /// A unique name (based on timestamp). Used for filing.
     name: String,
     /// Directory which stores multiple backups.
+    #[serde(skip)]
     store_path: Option<PathBuf>,
     /// Path which always points to current state
     #[serde(skip)]
     path: Option<PathBuf>,
     /// Path which always points to last successful state
-    #[serde(skip)]
-    success_path: Option<PathBuf>,
-    /// Path which points to this backup's state
-    permanent_path: Option<PathBuf>,
     /// Path to the parent state if one exists.
     ///
-    /// Note that this should be absolute or relative to PWD.
+    /// Note that this should be absolute or relative to store path
+    /// (or PWD if there is no store).
     parent_path: Option<PathBuf>,
     #[serde(skip)]
     parent: Option<Box<State>>,
@@ -44,16 +43,33 @@ pub struct State {
     jobs: Vec<Job>,
 }
 
+
+
 impl State {
     pub fn new(manifest: &Manifest) -> Result<Self,String> {
         let now = Local::now();
+        let name = format!("{}", now.format("%Y%m%d_%H%M%S"));
+        let store_path = manifest.store_path.clone().map(|x|{std::env::current_dir().unwrap().join(x)});
+        let path =
+            if let Some(state_path) = manifest.state_path.clone() {
+                if store_path.is_some() {
+                    return Err(format!("Cannot specify a state path when using a store."));
+                } else {
+                    Some(state_path)
+                }
+            } else {
+                if let Some(store_path) = &store_path {
+                    Some(store_path.join(Path::new(&name)).join("state.yaml"))
+                } else {
+                    None
+                }
+            };
+
         let mut state = Self {
-            name: format!("{}", now.format("%Y%m%d_%H%M%S")),
-            store_path: manifest.store_path.clone(),
-            path: manifest.state_path.clone(), //Initialized below
-            success_path: None, //Initialized below
-            permanent_path: None, //Initialized below
-            parent_path: None, //Initialized below
+            name,
+            store_path: store_path.clone(),
+            path: path.clone(),
+            parent_path: None, // Initialized below
             parent: None, // Initialized below
             started: Some(now.clone()),
             updated: now.clone(),
@@ -62,22 +78,17 @@ impl State {
             description: format!("This backup is in the setup phase. No data has been processed."),
             jobs: manifest.jobs.clone(),
         };
-        if let Some(path) = &state.path {
-            if let Some(store_path) = &state.store_path {
-                state.success_path = Some(store_path.join(Path::new("last_successful_backup.state")));
-            }
-            state.permanent_path = Some(state.stored_path(path));
-        }
 
         let parent_path = match &manifest.parent_state_path {
             Some(parent_state_path) => {
                 Some(parent_state_path.clone())
             },
             None => {
-                // Find a previous state by looking at anything already existing at success_path.
-                if let Some(success_path) = &state.success_path {
-                    if success_path.exists() {
-                        Some(success_path.clone())
+                // Find a previous state
+                if let Some(store_path) = &state.store_path {
+                    let store_state = StoreState::open_dir(store_path)?;
+                    if let Some(current) = store_state.current {
+                        Some(Path::new(&current).join(Path::new("state.yaml")))
                     } else {
                         None
                     }
@@ -93,8 +104,7 @@ impl State {
             if let Some(path) = &manifest.state_path {
                 seen_paths.insert(path.to_path_buf());
             }
-            let parent = Self::from_file_recursive(parent_path, seen_paths)?;
-            state.parent_path = Some(parent.permanent_path.clone().unwrap());
+            let parent = Self::from_file_recursive(store_path.as_ref().map(|x| {x.as_path()}), parent_path, seen_paths)?;
             state.parent = Some(Box::new(parent));
         }
 
@@ -114,19 +124,7 @@ impl State {
     /// Record state to all necessary files
     pub fn commit(&mut self) -> Result<(),String> {
         self.updated = Local::now();
-        let mut paths: Vec<&Path> = Vec::new();
         if let Some(path) = &self.path {
-            paths.push(path);
-        }
-        if self.health == Health::Success {
-            if let Some(success_path) = &self.success_path {
-                paths.push(success_path);
-            }
-        }
-        if let Some(permanent_path) = &self.permanent_path {
-            paths.push(permanent_path);
-        }
-        for path in paths {
             match File::create(path) {
                 Ok(file) => {
                     if let Err(e) = serde_yaml::to_writer::<File,State>(file, self) {
@@ -138,48 +136,55 @@ impl State {
                 }
             }
         }
+        if self.health == Health::Success {
+            if let Some(store_path) = &self.store_path {
+                let mut store_state = StoreState::open_dir(store_path)?;
+                store_state.states.insert(self.name.clone());
+                store_state.current = Some(self.name.clone());
+                store_state.commit()?;
+            }
+        }
         Ok(())
     }
 
     /// Load state from file recursively
-    pub fn from_file(path: &Path) -> Result<Self,String> {
-        Self::from_file_recursive(path, HashSet::new())
+    pub fn from_file(store_path: Option<&Path>, path: &Path) -> Result<Self,String> {
+        Self::from_file_recursive(store_path, path, HashSet::new())
     }
 
-    fn from_file_recursive(path: &Path, mut seen_paths: HashSet<PathBuf>) -> Result<Self,String> {
+    fn from_file_recursive(store_path: Option<&Path>, path: &Path, mut seen_paths: HashSet<PathBuf>) -> Result<Self,String> {
         if let Some(duplicate) = seen_paths.replace(path.to_path_buf()) {
             return Err(format!("State file cyclic dependency detected! Seen {} more than once.", duplicate.display()));
         }
 
-        match File::open(path) {
+        let full_path =
+            if let Some(store_path) = store_path {
+                store_path.join(path)
+            } else {
+                path.to_path_buf()
+            };
+
+        match File::open(&full_path) {
             Ok(file) => {
                 match serde_yaml::from_reader::<File,State>(file) {
                     Ok(mut state) => {
-                        if let Some(permanent_path) = &state.permanent_path {
-                            if permanent_path != path {
-                                // Load file from the official location instead.
-                                eprintln!("State file {} is redirecting to its permanent path, {}", path.display(), permanent_path.display());
-                                return Self::from_file_recursive(&permanent_path, seen_paths);
-                            }
-                        } else {
-                            return Err(format!("Saved state files must have a permanent path set"));
-                        }
-                        state.path = Some(path.to_path_buf());
+                        state.path = Some(full_path.to_path_buf());
+                        state.store_path = store_path.map(|x| {x.to_path_buf()});
                         state.validate()?;
                         if let Some(parent_path) = &state.parent_path {
-                            let parent = Self::from_file_recursive(parent_path, seen_paths)?;
+                            let parent = Self::from_file_recursive(store_path, parent_path, seen_paths)?;
                             state.check_parent(&parent)?;
                             state.parent = Some(Box::new(parent));
                         }
                         Ok(state)
                     },
                     Err(e) => {
-                        Err(format!("Failed to read a valid state from file {}: {:?}", path.display(), e))
+                        Err(format!("Failed to read a valid state from file {}: {:?}", full_path.display(), e))
                     },
                 }
             },
             Err(e) => {
-                Err(format!("Failed to open state file {}: {:?}", path.display(), e))
+                Err(format!("Failed to open state file {}: {:?}", full_path.display(), e))
             },
         }
     }

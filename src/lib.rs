@@ -19,3 +19,4 @@ pub mod cli;
 pub mod lock;
 pub mod state;
 mod storage;
+mod store_state;
